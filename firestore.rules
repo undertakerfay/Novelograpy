@@ -1,0 +1,103 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    //
+    // Collection: users
+    // Document ID: userId (UID)
+    // Fields:
+    //   - email: string (required) - User's email address
+    //   - role: string (required, enum: ['admin', 'user']) - User's role
+    //
+    // Collection: stories
+    // Document ID: storyId (UUID)
+    // Fields:
+    //   - title: string (required, max 100 chars) - The title of the novel
+    //   - subtitle: string (optional, max 200 chars) - The subtitle of the novel
+    //   - lastModified: number (required) - Timestamp of last modification
+    //   - characters: array (optional) - List of character objects
+    //   - chapters: array (optional) - List of chapter objects
+    //   - skillsAndWeapons: array (optional) - List of skill/weapon objects
+    //   - summary: string (optional, max 2000 chars) - A summary of the story
+    //   - isDeleted: boolean (optional) - Whether the story is in the recycle bin
+    //   - deletedAt: number (optional) - Timestamp when the story was deleted
+    //   - isPinned: boolean (optional) - Whether the story is pinned
+    //   - ownerId: string (required) - The UID of the user who owns this story
+    //
+    // ===============================================================
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isAdmin() {
+      return isAuthenticated() &&
+        (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin' ||
+          (request.auth.token.email == "mdalaminsifat2022@gmail.com" && request.auth.token.email_verified == true));
+    }
+
+    function hasRequiredFields(fields) {
+      return request.resource.data.keys().hasAll(fields);
+    }
+
+    function hasOnlyAllowedFields(fields) {
+      return request.resource.data.keys().hasOnly(fields);
+    }
+
+    function isValidEmail(email) {
+      return email is string && email.matches("^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$");
+    }
+
+    // ===============================================================
+    // Domain Validators
+    // ===============================================================
+
+    function isValidUser(data) {
+      return hasOnlyAllowedFields(['email', 'role']) &&
+             data.email is string && isValidEmail(data.email) &&
+             data.role in ['admin', 'user'];
+    }
+
+    function isValidStory(data) {
+      return hasRequiredFields(['title', 'lastModified', 'ownerId']) &&
+             data.title is string && data.title.size() <= 100 &&
+             (!('subtitle' in data) || (data.subtitle is string && data.subtitle.size() <= 200)) &&
+             data.lastModified is number &&
+             data.ownerId is string &&
+             (!('summary' in data) || (data.summary is string && data.summary.size() <= 2000)) &&
+             (!('isDeleted' in data) || data.isDeleted is bool) &&
+             (!('isPinned' in data) || data.isPinned is bool);
+    }
+
+    // ===============================================================
+    // Match Rules
+    // ===============================================================
+
+    match /users/{userId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() && isValidUser(request.resource.data) && (isOwner(userId) || isAdmin());
+      allow update: if isAuthenticated() && isValidUser(request.resource.data) && (isOwner(userId) || isAdmin());
+      allow delete: if isAdmin();
+    }
+
+    match /stories/{storyId} {
+      // Readers can read stories that are not deleted
+      allow read: if true;
+      
+      // Only owners or admins can create/update/delete
+      allow create: if isAuthenticated() && isValidStory(request.resource.data) && (request.resource.data.ownerId == request.auth.uid || isAdmin());
+      allow update: if isAuthenticated() && isValidStory(request.resource.data) && (resource.data.ownerId == request.auth.uid || isAdmin());
+      allow delete: if isAuthenticated() && (resource.data.ownerId == request.auth.uid || isAdmin());
+    }
+  }
+}

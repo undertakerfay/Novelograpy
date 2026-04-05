@@ -1,0 +1,104 @@
+{
+  "entities": {
+    "Story": {
+      "title": "Story",
+      "description": "A novel or story containing chapters, characters, and other metadata.",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string", "description": "The title of the novel." },
+        "subtitle": { "type": "string", "description": "The subtitle of the novel." },
+        "lastModified": { "type": "number", "description": "Timestamp of the last modification." },
+        "characters": { 
+          "type": "array", 
+          "items": { "$ref": "Character" },
+          "description": "List of characters in the story."
+        },
+        "chapters": { 
+          "type": "array", 
+          "items": { "$ref": "Chapter" },
+          "description": "List of chapters in the story."
+        },
+        "skillsAndWeapons": { 
+          "type": "array", 
+          "items": { "$ref": "SkillOrWeapon" },
+          "description": "List of skills and weapons in the story."
+        },
+        "summary": { "type": "string", "description": "A summary of the story." },
+        "isDeleted": { "type": "boolean", "description": "Whether the story is in the recycle bin." },
+        "deletedAt": { "type": "number", "description": "Timestamp when the story was deleted." },
+        "isPinned": { "type": "boolean", "description": "Whether the story is pinned to the top." },
+        "ownerId": { "type": "string", "description": "The UID of the user who owns this story." }
+      },
+      "required": ["title", "lastModified", "ownerId"]
+    },
+    "Character": {
+      "title": "Character",
+      "description": "A character in a story.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "role": { "type": "string" },
+        "description": { "type": "string" },
+        "traits": { "type": "array", "items": { "type": "string" } },
+        "isPinned": { "type": "boolean" },
+        "gender": { "type": "string", "enum": ["male", "female", "other"] }
+      }
+    },
+    "Chapter": {
+      "title": "Chapter",
+      "description": "A chapter in a story.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "title": { "type": "string" },
+        "content": { "type": "string" },
+        "plotPoints": { "type": "array", "items": { "$ref": "PlotPoint" } },
+        "order": { "type": "number" },
+        "isDeleted": { "type": "boolean" },
+        "deletedAt": { "type": "number" }
+      }
+    },
+    "PlotPoint": {
+      "title": "PlotPoint",
+      "description": "A specific event or plot point in a chapter.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "title": { "type": "string" },
+        "description": { "type": "string" },
+        "isCompleted": { "type": "boolean" }
+      }
+    },
+    "SkillOrWeapon": {
+      "title": "SkillOrWeapon",
+      "description": "A skill or weapon associated with a character or story.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "type": { "type": "string", "enum": ["skill", "weapon"] },
+        "name": { "type": "string" },
+        "description": { "type": "string" }
+      }
+    },
+    "User": {
+      "title": "User",
+      "description": "User profile and settings.",
+      "type": "object",
+      "properties": {
+        "email": { "type": "string" },
+        "role": { "type": "string", "enum": ["admin", "user"] }
+      }
+    }
+  },
+  "firestore": {
+    "stories": {
+      "schema": "Story",
+      "description": "Collection of stories/novels."
+    },
+    "users": {
+      "schema": "User",
+      "description": "Collection of user profiles."
+    }
+  }
+}
