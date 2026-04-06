@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { Plus, Book, Trash2, ChevronLeft, Search, Wand2, User, ListTodo, FileText, RotateCcw, XCircle, Pin, PinOff, Sword, Zap, ExternalLink, Bookmark, Venus, Mars, HelpCircle, Eye, X, List, Sparkles, MessageSquare, Anchor, BookOpen, Send, GripVertical } from 'lucide-react';
+import { Plus, Book, Trash2, ChevronLeft, Search, Wand2, User, ListTodo, FileText, RotateCcw, XCircle, Pin, PinOff, Sword, Zap, ExternalLink, Bookmark, Venus, Mars, HelpCircle, Eye, X, List, Sparkles, MessageSquare, Anchor, BookOpen, Send, GripVertical, Globe, MapPin, Ghost, ShieldAlert } from 'lucide-react';
 import Markdown from 'react-markdown';
 import { motion, AnimatePresence, Reorder } from 'motion/react';
-import { Story, AppView, Character, PlotPoint, Chapter, SkillOrWeapon } from './types';
+import { Story, AppView, Character, PlotPoint, Chapter, SkillOrWeapon, Creature, Location } from './types';
 import { cn } from './lib/utils';
 import { GoogleGenAI } from "@google/genai";
 import { auth, db, handleFirestoreError, OperationType } from './firebase';
@@ -21,13 +21,24 @@ const getPageCount = (text: string) => {
   return Math.max(1, Math.ceil(words / 300));
 };
 
+// Genre Constants
+const GENRES = [
+  'Fantasy', 'Epic Fantasy', 'Grimdark', 'Urban Fantasy', 'High Fantasy', 
+  'Sci-Fi', 'Cyberpunk', 'Space Opera', 'Steampunk', 
+  'Mystery', 'Thriller', 'Horror', 'Romance', 'Historical', 
+  'Adventure', 'Action', 'Cultivation', 'LitRPG', 'Isekai'
+];
+
 // Initial empty novel template
 const createNewStory = (ownerId: string): Partial<Story> => ({
   title: 'Untitled Novel',
   subtitle: '',
+  genres: [],
   lastModified: Date.now(),
   characters: [],
   skillsAndWeapons: [],
+  creatures: [],
+  locations: [],
   chapters: [
     {
       id: crypto.randomUUID(),
@@ -105,6 +116,7 @@ function AppContent() {
   const [view, setView] = useState<AppView | 'login'>('dashboard');
   const [dashboardTab, setDashboardTab] = useState<'my' | 'public'>('my');
   const [searchTerm, setSearchTerm] = useState('');
+  const [selectedGenre, setSelectedGenre] = useState<string | null>(null);
   const [showRecycleBin, setShowRecycleBin] = useState(false);
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [user, setUser] = useState<FirebaseUser | null>(null);
@@ -346,14 +358,15 @@ function AppContent() {
     const filtered = stories.filter(s => {
       const matchesSearch = s.title.toLowerCase().includes(searchTerm.toLowerCase());
       const matchesTab = (dashboardTab === 'public' || !isLoggedIn) ? s.isPublished : (showRecycleBin ? s.isDeleted : !s.isDeleted);
-      return matchesSearch && matchesTab;
+      const matchesGenre = !selectedGenre || (s.genres && s.genres.includes(selectedGenre));
+      return matchesSearch && matchesTab && matchesGenre;
     });
     
     return [...filtered].sort((a, b) => {
       if (a.isPinned === b.isPinned) return b.lastModified - a.lastModified;
       return a.isPinned ? -1 : 1;
     });
-  }, [stories, searchTerm, showRecycleBin, isLoggedIn, dashboardTab]);
+  }, [stories, searchTerm, showRecycleBin, isLoggedIn, dashboardTab, selectedGenre]);
 
   return (
     <div className="min-h-screen bg-brand-50 text-brand-900 font-sans selection:bg-brand-200">
@@ -439,15 +452,45 @@ function AppContent() {
               </div>
             </header>
 
-            <div className="relative mb-6 md:mb-8">
-              <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-brand-400" size={20} />
-              <input
-                type="text"
-                placeholder="Search your novels..."
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-                className="w-full bg-white border-2 border-brand-100 rounded-2xl py-3 md:py-4 pl-12 pr-4 focus:outline-none focus:border-brand-300 transition-colors shadow-sm text-sm md:text-base"
-              />
+            <div className="relative mb-6 md:mb-8 flex flex-col gap-4">
+              <div className="relative">
+                <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-brand-400" size={20} />
+                <input
+                  type="text"
+                  placeholder="Search your novels..."
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)}
+                  className="w-full bg-white border-2 border-brand-100 rounded-2xl py-3 md:py-4 pl-12 pr-4 focus:outline-none focus:border-brand-300 transition-colors shadow-sm text-sm md:text-base"
+                />
+              </div>
+              
+              <div className="flex items-center gap-2 overflow-x-auto no-scrollbar pb-2">
+                <button
+                  onClick={() => setSelectedGenre(null)}
+                  className={cn(
+                    "px-4 py-2 rounded-full text-xs font-bold transition-all whitespace-nowrap border-2",
+                    !selectedGenre 
+                      ? "bg-brand-800 border-brand-800 text-brand-50 shadow-md" 
+                      : "bg-white border-brand-100 text-brand-500 hover:border-brand-200"
+                  )}
+                >
+                  All Genres
+                </button>
+                {GENRES.map(genre => (
+                  <button
+                    key={genre}
+                    onClick={() => setSelectedGenre(selectedGenre === genre ? null : genre)}
+                    className={cn(
+                      "px-4 py-2 rounded-full text-xs font-bold transition-all whitespace-nowrap border-2",
+                      selectedGenre === genre 
+                        ? "bg-brand-800 border-brand-800 text-brand-50 shadow-md" 
+                        : "bg-white border-brand-100 text-brand-500 hover:border-brand-200"
+                    )}
+                  >
+                    {genre}
+                  </button>
+                ))}
+              </div>
             </div>
 
             {filteredStories.length > 0 || (showRecycleBin && stories.some(s => s.chapters.some(c => c.isDeleted))) ? (
@@ -534,6 +577,16 @@ function AppContent() {
                         </h3>
                         {story.subtitle && (
                           <p className="text-brand-400 text-sm mb-2 line-clamp-1 italic">{story.subtitle}</p>
+                        )}
+                        
+                        {story.genres && story.genres.length > 0 && (
+                          <div className="flex flex-wrap gap-1 mb-3">
+                            {story.genres.map(g => (
+                              <span key={g} className="px-2 py-0.5 bg-brand-50 text-brand-500 rounded-md text-[10px] font-bold">
+                                {g}
+                              </span>
+                            ))}
+                          </div>
                         )}
                         <p className="text-brand-500 text-sm mb-4 line-clamp-2">
                           {story.chapters.filter(c => !c.isDeleted).length} Chapters • {Math.max(1, Math.ceil(story.chapters.filter(c => !c.isDeleted).reduce((acc, c) => acc + getWordCount(c.content), 0) / 300))} Pages
@@ -760,7 +813,8 @@ function EditorView({ story, onBack, onUpdate, isLoggedIn }: {
   onUpdate: (updates: Partial<Story>) => void;
   isLoggedIn: boolean;
 }) {
-  const [activeTab, setActiveTab] = useState<'write' | 'characters' | 'skills_weapons' | 'plot'>('write');
+  const [activeTab, setActiveTab] = useState<'write' | 'characters' | 'skills_weapons' | 'plot' | 'world'>('write');
+  const [showGenreSelector, setShowGenreSelector] = useState(false);
   const [currentChapterId, setCurrentChapterId] = useState<string>(story.chapters[0]?.id || '');
   const [showAiHelper, setShowAiHelper] = useState(false);
   const [showSidebar, setShowSidebar] = useState(false);
@@ -880,6 +934,55 @@ function EditorView({ story, onBack, onUpdate, isLoggedIn }: {
                 )}
                 placeholder="Novel Subtitle"
               />
+              
+              <div className="flex flex-wrap gap-1 mt-1">
+                {story.genres && story.genres.map(g => (
+                  <span key={g} className="flex items-center gap-1 px-2 py-0.5 bg-brand-100 text-brand-600 rounded-md text-[10px] font-bold">
+                    {g}
+                    {isLoggedIn && (
+                      <button 
+                        onClick={() => onUpdate({ genres: story.genres.filter(genre => genre !== g) })}
+                        className="hover:text-red-500"
+                      >
+                        <X size={10} />
+                      </button>
+                    )}
+                  </span>
+                ))}
+                {isLoggedIn && (
+                  <div className="relative">
+                    <button 
+                      onClick={() => setShowGenreSelector(!showGenreSelector)}
+                      className="px-2 py-0.5 bg-brand-50 text-brand-400 rounded-md text-[10px] font-bold hover:bg-brand-100 transition-colors"
+                    >
+                      + Add Genre
+                    </button>
+                    <AnimatePresence>
+                      {showGenreSelector && (
+                        <motion.div 
+                          initial={{ opacity: 0, y: 5 }}
+                          animate={{ opacity: 1, y: 0 }}
+                          exit={{ opacity: 0, y: 5 }}
+                          className="absolute left-0 top-full mt-1 w-40 bg-white border border-brand-100 rounded-xl shadow-xl z-50 p-2 max-h-48 overflow-y-auto no-scrollbar"
+                        >
+                          {GENRES.filter(g => !story.genres?.includes(g)).map(genre => (
+                            <button
+                              key={genre}
+                              onClick={() => {
+                                onUpdate({ genres: [...(story.genres || []), genre] });
+                                setShowGenreSelector(false);
+                              }}
+                              className="w-full text-left px-3 py-1.5 text-[10px] font-bold text-brand-600 hover:bg-brand-50 rounded-lg transition-colors"
+                            >
+                              {genre}
+                            </button>
+                          ))}
+                        </motion.div>
+                      )}
+                    </AnimatePresence>
+                  </div>
+                )}
+              </div>
             </div>
           </div>
           {!isLoggedIn && (
@@ -916,6 +1019,12 @@ function EditorView({ story, onBack, onUpdate, isLoggedIn }: {
               label="Plot" 
             />
           )}
+          <TabButton 
+            active={activeTab === 'world'} 
+            onClick={() => setActiveTab('world')} 
+            icon={<Globe size={18} />} 
+            label="World" 
+          />
         </div>
 
         <div className="flex items-center gap-2">
@@ -988,6 +1097,12 @@ function EditorView({ story, onBack, onUpdate, isLoggedIn }: {
             label="Plot" 
           />
         )}
+        <TabButton 
+          active={activeTab === 'world'} 
+          onClick={() => setActiveTab('world')} 
+          icon={<Globe size={18} />} 
+          label="World" 
+        />
       </div>
 
       <main className="flex-1 flex overflow-hidden relative">
@@ -1139,6 +1254,17 @@ function EditorView({ story, onBack, onUpdate, isLoggedIn }: {
                 storyTitle={currentChapter.title}
                 plotPoints={currentChapter.plotPoints} 
                 onUpdate={(points) => updateChapter(currentChapter.id, { plotPoints: points })} 
+                isLoggedIn={isLoggedIn}
+              />
+            )}
+
+            {activeTab === 'world' && (
+              <WorldManager 
+                storyTitle={story.title}
+                creatures={story.creatures || []}
+                locations={story.locations || []}
+                onUpdateCreatures={(creatures) => onUpdate({ creatures })}
+                onUpdateLocations={(locations) => onUpdate({ locations })}
                 isLoggedIn={isLoggedIn}
               />
             )}
@@ -1740,6 +1866,284 @@ function PlotManager({ storyTitle, plotPoints, onUpdate, isLoggedIn }: { storyTi
   );
 }
 
+function WorldManager({ 
+  storyTitle, 
+  creatures, 
+  locations, 
+  onUpdateCreatures, 
+  onUpdateLocations, 
+  isLoggedIn 
+}: { 
+  storyTitle: string; 
+  creatures: Creature[]; 
+  locations: Location[]; 
+  onUpdateCreatures: (creatures: Creature[]) => void; 
+  onUpdateLocations: (locations: Location[]) => void; 
+  isLoggedIn: boolean;
+}) {
+  const [activeSubTab, setActiveSubTab] = useState<'creatures' | 'locations'>('creatures');
+
+  const addCreature = () => {
+    const newCreature: Creature = {
+      id: crypto.randomUUID(),
+      name: 'New Creature',
+      species: 'Unknown',
+      habitat: 'Unknown',
+      abilities: '',
+      threatLevel: 'low',
+      description: ''
+    };
+    onUpdateCreatures([...creatures, newCreature]);
+  };
+
+  const updateCreature = (id: string, updates: Partial<Creature>) => {
+    onUpdateCreatures(creatures.map(c => c.id === id ? { ...c, ...updates } : c));
+  };
+
+  const removeCreature = (id: string) => {
+    onUpdateCreatures(creatures.filter(c => c.id !== id));
+  };
+
+  const addLocation = () => {
+    const newLocation: Location = {
+      id: crypto.randomUUID(),
+      name: 'New Location',
+      climate: 'Unknown',
+      rulingPower: 'Unknown',
+      lore: '',
+      description: ''
+    };
+    onUpdateLocations([...locations, newLocation]);
+  };
+
+  const updateLocation = (id: string, updates: Partial<Location>) => {
+    onUpdateLocations(locations.map(l => l.id === id ? { ...l, ...updates } : l));
+  };
+
+  const removeLocation = (id: string) => {
+    onUpdateLocations(locations.filter(l => l.id !== id));
+  };
+
+  return (
+    <div className="space-y-6 md:space-y-8">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <h2 className="text-xl md:text-2xl font-bold font-serif">{storyTitle}: World Building</h2>
+        <div className="flex bg-brand-100 p-1 rounded-2xl">
+          <button
+            onClick={() => setActiveSubTab('creatures')}
+            className={cn(
+              "px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2",
+              activeSubTab === 'creatures' ? "bg-white text-brand-900 shadow-sm" : "text-brand-500 hover:text-brand-700"
+            )}
+          >
+            <Ghost size={14} /> Bestiary
+          </button>
+          <button
+            onClick={() => setActiveSubTab('locations')}
+            className={cn(
+              "px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2",
+              activeSubTab === 'locations' ? "bg-white text-brand-900 shadow-sm" : "text-brand-500 hover:text-brand-700"
+            )}
+          >
+            <MapPin size={14} /> Locations
+          </button>
+        </div>
+      </div>
+
+      {activeSubTab === 'creatures' ? (
+        <div className="space-y-6">
+          <div className="flex items-center justify-between">
+            <h3 className="text-lg font-bold text-brand-800 flex items-center gap-2">
+              <Ghost size={20} /> The Bestiary
+            </h3>
+            {isLoggedIn && (
+              <button onClick={addCreature} className="text-brand-600 hover:text-brand-800 font-medium text-sm flex items-center gap-1">
+                <Plus size={18} /> Add Creature
+              </button>
+            )}
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {creatures.map(creature => (
+              <div key={creature.id} className="bg-white p-6 rounded-3xl border-2 border-brand-100 shadow-sm space-y-4 relative group">
+                {isLoggedIn && (
+                  <button 
+                    onClick={() => removeCreature(creature.id)}
+                    className="absolute top-4 right-4 text-brand-200 hover:text-red-500 transition-colors opacity-0 group-hover:opacity-100"
+                  >
+                    <Trash2 size={18} />
+                  </button>
+                )}
+                <div className="space-y-3">
+                  <input
+                    placeholder="Creature Name"
+                    value={creature.name}
+                    onChange={(e) => updateCreature(creature.id, { name: e.target.value })}
+                    readOnly={!isLoggedIn}
+                    className="w-full text-lg font-bold bg-transparent focus:outline-none placeholder:text-brand-200"
+                  />
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-bold text-brand-400 uppercase tracking-wider">Species</label>
+                      <input
+                        placeholder="e.g. Dragon"
+                        value={creature.species}
+                        onChange={(e) => updateCreature(creature.id, { species: e.target.value })}
+                        readOnly={!isLoggedIn}
+                        className="w-full text-xs bg-brand-50 rounded-lg p-2 focus:outline-none"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-bold text-brand-400 uppercase tracking-wider">Habitat</label>
+                      <input
+                        placeholder="e.g. Volcanic Peaks"
+                        value={creature.habitat}
+                        onChange={(e) => updateCreature(creature.id, { habitat: e.target.value })}
+                        readOnly={!isLoggedIn}
+                        className="w-full text-xs bg-brand-50 rounded-lg p-2 focus:outline-none"
+                      />
+                    </div>
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-bold text-brand-400 uppercase tracking-wider">Threat Level</label>
+                    <div className="flex gap-2">
+                      {(['low', 'medium', 'high', 'calamity'] as const).map(level => (
+                        <button
+                          key={level}
+                          onClick={() => updateCreature(creature.id, { threatLevel: level })}
+                          disabled={!isLoggedIn}
+                          className={cn(
+                            "flex-1 py-1 rounded-lg text-[10px] font-bold uppercase transition-all",
+                            creature.threatLevel === level 
+                              ? level === 'low' ? "bg-green-500 text-white" :
+                                level === 'medium' ? "bg-yellow-500 text-white" :
+                                level === 'high' ? "bg-orange-500 text-white" :
+                                "bg-red-600 text-white"
+                              : "bg-brand-50 text-brand-400 hover:bg-brand-100"
+                          )}
+                        >
+                          {level}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-bold text-brand-400 uppercase tracking-wider">Abilities</label>
+                    <textarea
+                      placeholder="Magical powers, physical traits..."
+                      value={creature.abilities}
+                      onChange={(e) => updateCreature(creature.id, { abilities: e.target.value })}
+                      readOnly={!isLoggedIn}
+                      className="w-full text-xs bg-brand-50 rounded-lg p-2 focus:outline-none resize-none h-16"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-bold text-brand-400 uppercase tracking-wider">Description/Lore</label>
+                    <textarea
+                      placeholder="History, behavior, weaknesses..."
+                      value={creature.description}
+                      onChange={(e) => updateCreature(creature.id, { description: e.target.value })}
+                      readOnly={!isLoggedIn}
+                      className="w-full text-xs bg-brand-50 rounded-lg p-2 focus:outline-none resize-none h-24"
+                    />
+                  </div>
+                </div>
+              </div>
+            ))}
+            {creatures.length === 0 && (
+              <div className="col-span-full text-center py-12 bg-white rounded-3xl border-2 border-dashed border-brand-100 text-brand-400">
+                No creatures discovered yet. What lurks in the shadows?
+              </div>
+            )}
+          </div>
+        </div>
+      ) : (
+        <div className="space-y-6">
+          <div className="flex items-center justify-between">
+            <h3 className="text-lg font-bold text-brand-800 flex items-center gap-2">
+              <MapPin size={20} /> Locations
+            </h3>
+            {isLoggedIn && (
+              <button onClick={addLocation} className="text-brand-600 hover:text-brand-800 font-medium text-sm flex items-center gap-1">
+                <Plus size={18} /> Add Location
+              </button>
+            )}
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {locations.map(location => (
+              <div key={location.id} className="bg-white p-6 rounded-3xl border-2 border-brand-100 shadow-sm space-y-4 relative group">
+                {isLoggedIn && (
+                  <button 
+                    onClick={() => removeLocation(location.id)}
+                    className="absolute top-4 right-4 text-brand-200 hover:text-red-500 transition-colors opacity-0 group-hover:opacity-100"
+                  >
+                    <Trash2 size={18} />
+                  </button>
+                )}
+                <div className="space-y-3">
+                  <input
+                    placeholder="Location Name"
+                    value={location.name}
+                    onChange={(e) => updateLocation(location.id, { name: e.target.value })}
+                    readOnly={!isLoggedIn}
+                    className="w-full text-lg font-bold bg-transparent focus:outline-none placeholder:text-brand-200"
+                  />
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-bold text-brand-400 uppercase tracking-wider">Climate</label>
+                      <input
+                        placeholder="e.g. Tropical"
+                        value={location.climate}
+                        onChange={(e) => updateLocation(location.id, { climate: e.target.value })}
+                        readOnly={!isLoggedIn}
+                        className="w-full text-xs bg-brand-50 rounded-lg p-2 focus:outline-none"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-bold text-brand-400 uppercase tracking-wider">Ruling Power</label>
+                      <input
+                        placeholder="e.g. The Sun Empire"
+                        value={location.rulingPower}
+                        onChange={(e) => updateLocation(location.id, { rulingPower: e.target.value })}
+                        readOnly={!isLoggedIn}
+                        className="w-full text-xs bg-brand-50 rounded-lg p-2 focus:outline-none"
+                      />
+                    </div>
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-bold text-brand-400 uppercase tracking-wider">Lore/History</label>
+                    <textarea
+                      placeholder="Ancient legends, historical events..."
+                      value={location.lore}
+                      onChange={(e) => updateLocation(location.id, { lore: e.target.value })}
+                      readOnly={!isLoggedIn}
+                      className="w-full text-xs bg-brand-50 rounded-lg p-2 focus:outline-none resize-none h-20"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-bold text-brand-400 uppercase tracking-wider">Description</label>
+                    <textarea
+                      placeholder="Geography, atmosphere, landmarks..."
+                      value={location.description}
+                      onChange={(e) => updateLocation(location.id, { description: e.target.value })}
+                      readOnly={!isLoggedIn}
+                      className="w-full text-xs bg-brand-50 rounded-lg p-2 focus:outline-none resize-none h-24"
+                    />
+                  </div>
+                </div>
+              </div>
+            ))}
+            {locations.length === 0 && (
+              <div className="col-span-full text-center py-12 bg-white rounded-3xl border-2 border-dashed border-brand-100 text-brand-400">
+                The map is blank. Where does the journey begin?
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function AiMuse({ story, currentChapter }: { story: Story; currentChapter?: Chapter }) {
   const [query, setQuery] = useState('');
   const [loading, setLoading] = useState(false);
@@ -1777,8 +2181,11 @@ function AiMuse({ story, currentChapter }: { story: Story; currentChapter?: Chap
         You are a helpful writing assistant for a novelist named Master Fay. 
         Current Novel: "${story.title}"
         Subtitle: "${story.subtitle || 'None'}"
+        Genres: ${story.genres?.join(', ') || 'None'}
         Characters: ${story.characters.map(c => `${c.name} (${c.role}): ${c.description}`).join(', ')}
         Skills & Weapons: ${story.skillsAndWeapons?.map(i => `${i.name} (${i.type}): ${i.description}`).join(', ') || 'None'}
+        Creatures (Bestiary): ${story.creatures?.map(c => `${c.name} (${c.species}): ${c.description}`).join(', ') || 'None'}
+        Locations: ${story.locations?.map(l => `${l.name} (${l.climate}): ${l.description}`).join(', ') || 'None'}
         
         PREVIOUS CHAPTERS CONTEXT:
         ${previousChaptersContext || 'This is the first chapter.'}
