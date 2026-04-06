@@ -44,6 +44,7 @@ export interface Story {
   isDeleted?: boolean;
   deletedAt?: number;
   isPinned?: boolean;
+  isPublished?: boolean;
   ownerId: string;
 }
 

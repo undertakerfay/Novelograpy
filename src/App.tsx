@@ -37,6 +37,8 @@ const createNewStory = (ownerId: string): Partial<Story> => ({
       order: 0
     }
   ],
+  isPublished: false,
+  isDeleted: false,
   ownerId
 });
 
@@ -101,6 +103,7 @@ function AppContent() {
   const [stories, setStories] = useState<Story[]>([]);
   const [currentStoryId, setCurrentStoryId] = useState<string | null>(null);
   const [view, setView] = useState<AppView | 'login'>('dashboard');
+  const [dashboardTab, setDashboardTab] = useState<'my' | 'public'>('my');
   const [searchTerm, setSearchTerm] = useState('');
   const [showRecycleBin, setShowRecycleBin] = useState(false);
   const [isLoggedIn, setIsLoggedIn] = useState(false);
@@ -135,6 +138,11 @@ function AppContent() {
       setUser(firebaseUser);
       setIsLoggedIn(!!firebaseUser);
       setIsAuthReady(true);
+      if (!firebaseUser) {
+        setDashboardTab('public');
+      } else {
+        setDashboardTab('my');
+      }
     });
     return () => unsubscribe();
   }, []);
@@ -161,10 +169,10 @@ function AppContent() {
     if (!isAuthReady) return;
 
     const storiesRef = collection(db, 'stories');
-    // For readers, show all non-deleted stories. For writers, show their own.
-    const q = isLoggedIn && user
+    // For readers or public tab, show all published stories. For writers in 'my' tab, show their own.
+    const q = isLoggedIn && user && dashboardTab === 'my'
       ? query(storiesRef, where('ownerId', '==', user.uid))
-      : query(storiesRef, where('isDeleted', '==', false));
+      : query(storiesRef, where('isPublished', '==', true));
 
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const fetchedStories = snapshot.docs.map(doc => ({
@@ -321,10 +329,11 @@ function AppContent() {
   };
 
   const filteredStories = useMemo(() => {
-    const filtered = stories.filter(s => 
-      s.title.toLowerCase().includes(searchTerm.toLowerCase()) && 
-      (showRecycleBin ? s.isDeleted : !s.isDeleted)
-    );
+    const filtered = stories.filter(s => {
+      const matchesSearch = s.title.toLowerCase().includes(searchTerm.toLowerCase());
+      const matchesTab = (dashboardTab === 'public' || !isLoggedIn) ? s.isPublished : (showRecycleBin ? s.isDeleted : !s.isDeleted);
+      return matchesSearch && matchesTab;
+    });
     
     return [...filtered].sort((a, b) => {
       if (a.isPinned === b.isPinned) return b.lastModified - a.lastModified;
@@ -349,7 +358,29 @@ function AppContent() {
                 <p className="text-brand-600 text-sm md:text-base">Where {isLoggedIn ? "your" : "my"} worlds come to life.</p>
               </div>
               <div className="flex items-center justify-end gap-3 md:gap-4 w-full sm:w-auto">
-                {!showRecycleBin && isLoggedIn && (
+                {isLoggedIn && (
+                  <div className="flex bg-brand-100 p-1 rounded-2xl mr-2">
+                    <button
+                      onClick={() => { setDashboardTab('my'); setShowRecycleBin(false); }}
+                      className={cn(
+                        "px-4 py-2 rounded-xl text-xs font-bold transition-all",
+                        dashboardTab === 'my' ? "bg-white text-brand-900 shadow-sm" : "text-brand-500 hover:text-brand-700"
+                      )}
+                    >
+                      My Library
+                    </button>
+                    <button
+                      onClick={() => { setDashboardTab('public'); setShowRecycleBin(false); }}
+                      className={cn(
+                        "px-4 py-2 rounded-xl text-xs font-bold transition-all",
+                        dashboardTab === 'public' ? "bg-white text-brand-900 shadow-sm" : "text-brand-500 hover:text-brand-700"
+                      )}
+                    >
+                      Public Library
+                    </button>
+                  </div>
+                )}
+                {!showRecycleBin && isLoggedIn && dashboardTab === 'my' && (
                   <button
                     onClick={handleCreateStory}
                     title="New Novel"
@@ -432,6 +463,11 @@ function AppContent() {
                         )}
                         <div className="flex justify-between items-start mb-4">
                           <div className="flex gap-2 order-2">
+                            {story.isPublished && !story.isDeleted && (
+                              <div className="flex items-center gap-1 px-2 py-1 bg-green-100 text-green-700 rounded-lg text-[10px] font-bold uppercase tracking-wider">
+                                <Eye size={12} /> Published
+                              </div>
+                            )}
                             {story.isDeleted ? (
                               <>
                                 <button
@@ -545,7 +581,7 @@ function AppContent() {
               <div className="text-center py-20 bg-white rounded-3xl border-2 border-dashed border-brand-200">
                 <Book className="mx-auto text-brand-200 mb-4" size={48} />
                 <h3 className="text-xl font-medium text-brand-400">
-                  {showRecycleBin ? "Recycle bin is empty" : "No novels found"}
+                  {showRecycleBin ? "Recycle bin is empty" : (dashboardTab === 'public' ? "No published novels yet" : "No novels found")}
                 </h3>
                 {!showRecycleBin && (
                   <div className="text-center">
@@ -764,29 +800,44 @@ function EditorView({ story, onBack, onUpdate, isLoggedIn }: {
       {/* Editor Header */}
       <header className="bg-white border-b border-brand-100 px-4 md:px-6 py-3 md:py-4 flex items-center justify-between z-30 sticky top-0">
         <div className="flex items-center gap-2 md:gap-4 flex-1 min-w-0">
+          <button
+            onClick={onBack}
+            className="p-2 hover:bg-brand-50 rounded-full text-brand-600 transition-colors shrink-0"
+            title="Back to Dashboard"
+          >
+            <ChevronLeft size={24} />
+          </button>
           <div className="flex flex-col flex-1 min-w-0">
-            <input
-              type="text"
-              value={story.title}
-              onChange={(e) => onUpdate({ title: e.target.value })}
-              readOnly={!isLoggedIn}
-              className={cn(
-                "text-lg md:text-xl font-bold bg-transparent border-none focus:outline-none text-brand-900 placeholder:text-brand-200 truncate",
-                !isLoggedIn && "cursor-default"
-              )}
-              placeholder="Novel Title"
-            />
-            <input
-              type="text"
-              value={story.subtitle || ''}
-              onChange={(e) => onUpdate({ subtitle: e.target.value })}
-              readOnly={!isLoggedIn}
-              className={cn(
-                "text-xs md:text-sm italic bg-transparent border-none focus:outline-none text-brand-400 placeholder:text-brand-200 truncate",
-                !isLoggedIn && "cursor-default"
-              )}
-              placeholder="Novel Subtitle"
-            />
+            <button 
+              onClick={onBack}
+              className="w-fit text-brand-400 hover:text-brand-800 text-[10px] font-bold uppercase tracking-widest transition-colors mb-0.5"
+            >
+              Dashboard
+            </button>
+            <div className="flex flex-col">
+              <input
+                type="text"
+                value={story.title}
+                onChange={(e) => onUpdate({ title: e.target.value })}
+                readOnly={!isLoggedIn}
+                className={cn(
+                  "text-lg md:text-xl font-bold bg-transparent border-none focus:outline-none text-brand-900 placeholder:text-brand-200 truncate",
+                  !isLoggedIn && "cursor-default"
+                )}
+                placeholder="Novel Title"
+              />
+              <input
+                type="text"
+                value={story.subtitle || ''}
+                onChange={(e) => onUpdate({ subtitle: e.target.value })}
+                readOnly={!isLoggedIn}
+                className={cn(
+                  "text-xs md:text-sm italic bg-transparent border-none focus:outline-none text-brand-400 placeholder:text-brand-200 truncate",
+                  !isLoggedIn && "cursor-default"
+                )}
+                placeholder="Novel Subtitle"
+              />
+            </div>
           </div>
           {!isLoggedIn && (
             <div className="hidden md:flex items-center gap-1.5 px-3 py-1 bg-brand-100 text-brand-600 rounded-full text-[10px] font-bold uppercase tracking-wider mx-2">
@@ -836,6 +887,21 @@ function EditorView({ story, onBack, onUpdate, isLoggedIn }: {
           )}
           {isLoggedIn && (
             <button
+              onClick={() => onUpdate({ isPublished: !story.isPublished })}
+              title={story.isPublished ? "Unpublish Novel" : "Publish Novel"}
+              className={cn(
+                "flex items-center gap-2 px-3 md:px-4 py-2 rounded-full font-medium transition-all shadow-sm border-2",
+                story.isPublished 
+                  ? "bg-green-50 border-green-200 text-green-700 hover:bg-green-100 hover:border-green-300" 
+                  : "bg-brand-800 border-brand-800 text-brand-50 hover:bg-brand-700"
+              )}
+            >
+              {story.isPublished ? <Eye size={18} /> : <Sparkles size={18} />}
+              <span className="hidden sm:inline">{story.isPublished ? "Published" : "Publish"}</span>
+            </button>
+          )}
+          {isLoggedIn && (
+            <button
               onClick={() => setShowAiHelper(!showAiHelper)}
               className={cn(
                 "flex items-center gap-2 px-3 md:px-4 py-2 rounded-full font-medium transition-all",
@@ -848,12 +914,6 @@ function EditorView({ story, onBack, onUpdate, isLoggedIn }: {
               <span className="hidden md:inline">AI Muse</span>
             </button>
           )}
-          <button
-            onClick={onBack}
-            className="p-2 hover:bg-brand-50 rounded-full text-brand-600 transition-colors shrink-0"
-          >
-            <ChevronLeft size={24} />
-          </button>
         </div>
       </header>
 
