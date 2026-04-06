@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { Plus, Book, Trash2, ChevronLeft, Search, Wand2, User, ListTodo, FileText, RotateCcw, XCircle, Pin, PinOff, Sword, Zap, ExternalLink, Bookmark, Venus, Mars, HelpCircle, Eye, X, List, Sparkles, MessageSquare, Anchor, BookOpen, Send } from 'lucide-react';
+import { Plus, Book, Trash2, ChevronLeft, Search, Wand2, User, ListTodo, FileText, RotateCcw, XCircle, Pin, PinOff, Sword, Zap, ExternalLink, Bookmark, Venus, Mars, HelpCircle, Eye, X, List, Sparkles, MessageSquare, Anchor, BookOpen, Send, GripVertical } from 'lucide-react';
 import Markdown from 'react-markdown';
-import { motion, AnimatePresence } from 'motion/react';
+import { motion, AnimatePresence, Reorder } from 'motion/react';
 import { Story, AppView, Character, PlotPoint, Chapter, SkillOrWeapon } from './types';
 import { cn } from './lib/utils';
 import { GoogleGenAI } from "@google/genai";
@@ -251,6 +251,8 @@ function AppContent() {
         isDeleted: false,
         deletedAt: null
       });
+      setNotification({ message: "Novel restored from recycle bin.", type: 'welcome' });
+      setTimeout(() => setNotification(null), 3000);
     } catch (error) {
       handleFirestoreError(error, OperationType.UPDATE, `stories/${id}`);
     }
@@ -288,12 +290,24 @@ function AppContent() {
     const story = stories.find(s => s.id === storyId);
     if (!story) return;
     try {
-      const updatedChapters = story.chapters.map(c => 
-        c.id === chapterId ? { ...c, isDeleted: false, deletedAt: undefined } : c
+      let updatedChapters = story.chapters.map(c => 
+        c.id === chapterId ? { ...c, isDeleted: false, deletedAt: null } : c
       );
-      await updateDoc(doc(db, 'stories', storyId), {
-        chapters: updatedChapters
+      
+      // Re-sort and re-number after restoration
+      const active = updatedChapters.filter(c => !c.isDeleted).sort((a, b) => a.order - b.order);
+      const deleted = updatedChapters.filter(c => c.isDeleted);
+      
+      const renumberedActive = active.map((c, index) => {
+        const newTitle = c.title.match(/^Chapter \d+$/) ? `Chapter ${index + 1}` : c.title;
+        return { ...c, order: index, title: newTitle };
       });
+      
+      await updateDoc(doc(db, 'stories', storyId), {
+        chapters: [...renumberedActive, ...deleted]
+      });
+      setNotification({ message: "Chapter restored successfully.", type: 'welcome' });
+      setTimeout(() => setNotification(null), 3000);
     } catch (error) {
       handleFirestoreError(error, OperationType.UPDATE, `stories/${storyId}`);
     }
@@ -339,7 +353,7 @@ function AppContent() {
       if (a.isPinned === b.isPinned) return b.lastModified - a.lastModified;
       return a.isPinned ? -1 : 1;
     });
-  }, [stories, searchTerm, showRecycleBin]);
+  }, [stories, searchTerm, showRecycleBin, isLoggedIn, dashboardTab]);
 
   return (
     <div className="min-h-screen bg-brand-50 text-brand-900 font-sans selection:bg-brand-200">
@@ -756,6 +770,24 @@ function EditorView({ story, onBack, onUpdate, isLoggedIn }: {
     [story.chapters]
   );
 
+  const handleReorderChapters = (reorderedActive: Chapter[]) => {
+    if (!isLoggedIn) return;
+    
+    // Maintain the deleted chapters in the full list
+    const deletedChapters = story.chapters.filter(c => c.isDeleted);
+    
+    // Renumber the reordered active chapters
+    const renumberedActive = reorderedActive.map((c, index) => {
+      // Only auto-rename if it follows the "Chapter N" pattern
+      const newTitle = c.title.match(/^Chapter \d+$/) ? `Chapter ${index + 1}` : c.title;
+      return { ...c, order: index, title: newTitle };
+    });
+    
+    onUpdate({
+      chapters: [...renumberedActive, ...deletedChapters]
+    });
+  };
+
   const currentChapter = story.chapters.find(c => c.id === currentChapterId && !c.isDeleted) || activeChapters[0];
 
   const updateChapter = (chapterId: string, updates: Partial<Chapter>) => {
@@ -766,12 +798,13 @@ function EditorView({ story, onBack, onUpdate, isLoggedIn }: {
 
   const addChapter = () => {
     if (!isLoggedIn) return;
+    const activeCount = story.chapters.filter(c => !c.isDeleted).length;
     const newChapter: Chapter = {
       id: crypto.randomUUID(),
-      title: `Chapter ${story.chapters.length + 1}`,
+      title: `Chapter ${activeCount + 1}`,
       content: '',
       plotPoints: [],
-      order: story.chapters.length
+      order: activeCount
     };
     onUpdate({ chapters: [...story.chapters, newChapter] });
     setCurrentChapterId(newChapter.id);
@@ -784,13 +817,23 @@ function EditorView({ story, onBack, onUpdate, isLoggedIn }: {
       return;
     }
     if (confirm('Delete this chapter? It will be moved to the recycle bin.')) {
-      const newChapters = story.chapters.map(c => 
+      const updatedChapters = story.chapters.map(c => 
         c.id === id ? { ...c, isDeleted: true, deletedAt: Date.now() } : c
       );
-      onUpdate({ chapters: newChapters });
+      
+      // Re-number remaining active chapters
+      const active = updatedChapters.filter(c => !c.isDeleted).sort((a, b) => a.order - b.order);
+      const deleted = updatedChapters.filter(c => c.isDeleted);
+      
+      const renumberedActive = active.map((c, index) => {
+        const newTitle = c.title.match(/^Chapter \d+$/) ? `Chapter ${index + 1}` : c.title;
+        return { ...c, order: index, title: newTitle };
+      });
+      
+      onUpdate({ chapters: [...renumberedActive, ...deleted] });
+      
       if (currentChapterId === id) {
-        const remainingActive = newChapters.filter(c => !c.isDeleted);
-        setCurrentChapterId(remainingActive[0].id);
+        setCurrentChapterId(renumberedActive[0].id);
       }
     }
   };
@@ -979,22 +1022,33 @@ function EditorView({ story, onBack, onUpdate, isLoggedIn }: {
                   </button>
                 </div>
               </div>
-              <div className="flex-1 p-2 space-y-1 overflow-y-auto">
+              <Reorder.Group 
+                axis="y" 
+                values={activeChapters} 
+                onReorder={handleReorderChapters}
+                className="flex-1 p-2 space-y-1 overflow-y-auto"
+              >
                 {activeChapters.map((chapter) => (
-                  <div
+                  <Reorder.Item
                     key={chapter.id}
+                    value={chapter}
                     onClick={() => {
                       setCurrentChapterId(chapter.id);
                       if (window.innerWidth < 1024) setShowSidebar(false);
                     }}
                     className={cn(
-                      "group flex items-center justify-between p-3 rounded-xl cursor-pointer transition-all",
+                      "group flex items-center gap-2 p-3 rounded-xl cursor-pointer transition-all",
                       currentChapterId === chapter.id 
                         ? "bg-brand-100 text-brand-900 font-medium" 
                         : "hover:bg-brand-50 text-brand-600"
                     )}
                   >
-                    <div className="flex flex-col truncate">
+                    {isLoggedIn && (
+                      <div className="cursor-grab active:cursor-grabbing text-brand-300 group-hover:text-brand-400">
+                        <GripVertical size={16} />
+                      </div>
+                    )}
+                    <div className="flex flex-col truncate flex-1">
                       <span className="truncate">{chapter.title}</span>
                       <span className="text-[10px] text-brand-400 font-normal">
                         {getWordCount(chapter.content)} words
@@ -1009,9 +1063,9 @@ function EditorView({ story, onBack, onUpdate, isLoggedIn }: {
                     >
                       <Trash2 size={14} />
                     </button>
-                  </div>
+                  </Reorder.Item>
                 ))}
-              </div>
+              </Reorder.Group>
             </aside>
           </>
         )}
