@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { Plus, Book, Trash2, ChevronLeft, Search, Wand2, User, ListTodo, FileText, RotateCcw, XCircle, Pin, PinOff, Sword, Zap, ExternalLink, Bookmark, Venus, Mars, HelpCircle, Eye, X, List, Sparkles, MessageSquare, Anchor, BookOpen, Send, GripVertical, Globe, MapPin, Ghost, ShieldAlert } from 'lucide-react';
 import Markdown from 'react-markdown';
 import { motion, AnimatePresence, Reorder } from 'motion/react';
-import { Story, AppView, Character, PlotPoint, Chapter, SkillOrWeapon, Creature, Location } from './types';
+import { Story, AppView, Character, PlotPoint, Chapter, Creature, Location, Faction, Skill, Weapon } from './types';
 import { cn } from './lib/utils';
 import { GoogleGenAI } from "@google/genai";
 import { auth, db, handleFirestoreError, OperationType } from './firebase';
@@ -36,9 +36,11 @@ const createNewStory = (ownerId: string): Partial<Story> => ({
   genres: [],
   lastModified: Date.now(),
   characters: [],
-  skillsAndWeapons: [],
   creatures: [],
   locations: [],
+  factions: [],
+  skills: [],
+  weapons: [],
   chapters: [
     {
       id: crypto.randomUUID(),
@@ -813,7 +815,7 @@ function EditorView({ story, onBack, onUpdate, isLoggedIn }: {
   onUpdate: (updates: Partial<Story>) => void;
   isLoggedIn: boolean;
 }) {
-  const [activeTab, setActiveTab] = useState<'write' | 'characters' | 'skills_weapons' | 'plot' | 'world'>('write');
+  const [activeTab, setActiveTab] = useState<'write' | 'characters' | 'plot' | 'world'>('write');
   const [showGenreSelector, setShowGenreSelector] = useState(false);
   const [currentChapterId, setCurrentChapterId] = useState<string>(story.chapters[0]?.id || '');
   const [showAiHelper, setShowAiHelper] = useState(false);
@@ -1005,12 +1007,6 @@ function EditorView({ story, onBack, onUpdate, isLoggedIn }: {
             icon={<User size={18} />} 
             label="Characters" 
           />
-          <TabButton 
-            active={activeTab === 'skills_weapons'} 
-            onClick={() => setActiveTab('skills_weapons')} 
-            icon={<Sword size={18} />} 
-            label="Skills & Weapons" 
-          />
           {isLoggedIn && (
             <TabButton 
               active={activeTab === 'plot'} 
@@ -1082,12 +1078,6 @@ function EditorView({ story, onBack, onUpdate, isLoggedIn }: {
           onClick={() => setActiveTab('characters')} 
           icon={<User size={18} />} 
           label="Characters" 
-        />
-        <TabButton 
-          active={activeTab === 'skills_weapons'} 
-          onClick={() => setActiveTab('skills_weapons')} 
-          icon={<Sword size={18} />} 
-          label="Skills" 
         />
         {isLoggedIn && (
           <TabButton 
@@ -1240,15 +1230,6 @@ function EditorView({ story, onBack, onUpdate, isLoggedIn }: {
               />
             )}
 
-            {activeTab === 'skills_weapons' && (
-              <SkillsWeaponsManager 
-                storyTitle={story.title}
-                items={story.skillsAndWeapons || []} 
-                onUpdate={(items) => onUpdate({ skillsAndWeapons: items })} 
-                isLoggedIn={isLoggedIn}
-              />
-            )}
-
             {activeTab === 'plot' && currentChapter && (
               <PlotManager 
                 storyTitle={currentChapter.title}
@@ -1263,8 +1244,14 @@ function EditorView({ story, onBack, onUpdate, isLoggedIn }: {
                 storyTitle={story.title}
                 creatures={story.creatures || []}
                 locations={story.locations || []}
+                factions={story.factions || []}
+                skills={story.skills || []}
+                weapons={story.weapons || []}
                 onUpdateCreatures={(creatures) => onUpdate({ creatures })}
                 onUpdateLocations={(locations) => onUpdate({ locations })}
+                onUpdateFactions={(factions) => onUpdate({ factions })}
+                onUpdateSkills={(skills) => onUpdate({ skills })}
+                onUpdateWeapons={(weapons) => onUpdate({ weapons })}
                 isLoggedIn={isLoggedIn}
               />
             )}
@@ -1576,206 +1563,6 @@ function CharacterManager({ storyTitle, characters, onUpdate, isLoggedIn }: { st
   );
 }
 
-function SkillsWeaponsManager({ storyTitle, items, onUpdate, isLoggedIn }: { 
-  storyTitle: string; 
-  items: SkillOrWeapon[]; 
-  onUpdate: (items: SkillOrWeapon[]) => void;
-  isLoggedIn: boolean;
-}) {
-  const [searchTerm, setSearchTerm] = useState('');
-  const [showTypeSelector, setShowTypeSelector] = useState(false);
-  const [filterType, setFilterType] = useState<'all' | 'skill' | 'weapon'>('all');
-
-  const filteredItems = useMemo(() => {
-    return items.filter(item => {
-      const matchesSearch = item.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                          item.type.toLowerCase().includes(searchTerm.toLowerCase());
-      const matchesType = filterType === 'all' || item.type === filterType;
-      return matchesSearch && matchesType;
-    });
-  }, [items, searchTerm, filterType]);
-
-  const addItem = (type: 'skill' | 'weapon') => {
-    const newItem: SkillOrWeapon = {
-      id: crypto.randomUUID(),
-      type,
-      name: '',
-      description: ''
-    };
-    onUpdate([newItem, ...items]);
-    setShowTypeSelector(false);
-  };
-
-  const updateItem = (id: string, updates: Partial<SkillOrWeapon>) => {
-    onUpdate(items.map(item => item.id === id ? { ...item, ...updates } : item));
-  };
-
-  const removeItem = (id: string) => {
-    onUpdate(items.filter(item => item.id !== id));
-  };
-
-  return (
-    <div className="space-y-6 md:space-y-8">
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <h2 className="text-xl md:text-2xl font-bold font-serif">{storyTitle}: Skills & Weapons</h2>
-        <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-4">
-          <div className="flex bg-brand-100 p-1 rounded-xl overflow-x-auto no-scrollbar">
-            {(['all', 'skill', 'weapon'] as const).map((type) => (
-              <button
-                key={type}
-                onClick={() => setFilterType(type)}
-                className={cn(
-                  "flex-1 sm:flex-none px-3 py-1.5 rounded-lg text-xs font-bold capitalize transition-all whitespace-nowrap",
-                  filterType === type ? "bg-white text-brand-900 shadow-sm" : "text-brand-500 hover:text-brand-700"
-                )}
-              >
-                {type}
-              </button>
-            ))}
-          </div>
-          {isLoggedIn && (
-            <div className="relative flex justify-end">
-              <button 
-                onClick={() => setShowTypeSelector(!showTypeSelector)} 
-                className="w-full sm:w-auto flex items-center justify-center gap-2 bg-brand-800 text-brand-50 px-4 py-2.5 rounded-xl font-medium hover:bg-brand-700 transition-all"
-              >
-                <Plus size={18} /> Add New
-              </button>
-              
-              <AnimatePresence>
-                {showTypeSelector && (
-                  <motion.div 
-                    initial={{ opacity: 0, y: 10 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    exit={{ opacity: 0, y: 10 }}
-                    className="absolute right-0 sm:right-0 mt-2 w-full sm:w-48 bg-white border border-brand-100 rounded-2xl shadow-xl z-30 overflow-hidden"
-                  >
-                    <button 
-                      onClick={() => addItem('skill')}
-                      className="w-full flex items-center gap-3 px-4 py-3 hover:bg-brand-50 text-brand-700 transition-colors text-left"
-                    >
-                      <Zap size={18} className="text-yellow-500" />
-                      <span>Add Skill</span>
-                    </button>
-                    <button 
-                      onClick={() => addItem('weapon')}
-                      className="w-full flex items-center gap-3 px-4 py-3 hover:bg-brand-50 text-brand-700 transition-colors border-t border-brand-50 text-left"
-                    >
-                      <Sword size={18} className="text-red-500" />
-                      <span>Add Weapon</span>
-                    </button>
-                  </motion.div>
-                )}
-              </AnimatePresence>
-            </div>
-          )}
-        </div>
-      </div>
-
-      <div className="relative">
-        <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-brand-400" size={18} />
-        <input
-          type="text"
-          placeholder="Filter by name or type..."
-          value={searchTerm}
-          onChange={(e) => setSearchTerm(e.target.value)}
-          className="w-full bg-white border-2 border-brand-100 rounded-2xl py-2.5 md:py-3 pl-12 pr-4 focus:outline-none focus:border-brand-300 transition-colors shadow-sm text-sm md:text-base"
-        />
-      </div>
-      
-      <div className="grid grid-cols-1 gap-8">
-        {filterType === 'all' ? (
-          <>
-            {['skill', 'weapon'].map((type) => {
-              const typeItems = filteredItems.filter(i => i.type === type);
-              if (typeItems.length === 0) return null;
-              return (
-                <div key={type} className="space-y-4">
-                  <div className="flex items-center gap-2 px-2">
-                    {type === 'skill' ? <Zap size={16} className="text-yellow-500" /> : <Sword size={16} className="text-red-500" />}
-                    <h3 className="text-sm font-bold uppercase tracking-widest text-brand-400">{type}s</h3>
-                  </div>
-                  <div className="grid grid-cols-1 gap-6">
-                    {typeItems.map((item) => (
-                      <SkillWeaponCard key={item.id} item={item} updateItem={updateItem} removeItem={removeItem} isLoggedIn={isLoggedIn} />
-                    ))}
-                  </div>
-                </div>
-              );
-            })}
-          </>
-        ) : (
-          <div className="grid grid-cols-1 gap-6">
-            {filteredItems.map((item) => (
-              <SkillWeaponCard key={item.id} item={item} updateItem={updateItem} removeItem={removeItem} isLoggedIn={isLoggedIn} />
-            ))}
-          </div>
-        )}
-        {filteredItems.length === 0 && (
-          <div className="text-center py-12 text-brand-400">
-            {searchTerm ? "No items match your search." : "No skills or weapons yet. Add something powerful!"}
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function SkillWeaponCard({ item, updateItem, removeItem, isLoggedIn }: { 
-  item: SkillOrWeapon; 
-  updateItem: (id: string, updates: Partial<SkillOrWeapon>) => void; 
-  removeItem: (id: string) => void;
-  isLoggedIn: boolean;
-}) {
-  return (
-    <div className="bg-white p-4 md:p-6 rounded-3xl border-2 border-brand-100 shadow-sm space-y-4 relative overflow-hidden">
-      <div className={cn(
-        "absolute top-0 right-0 text-[10px] font-bold px-3 py-1 rounded-bl-xl uppercase tracking-wider",
-        item.type === 'skill' ? "bg-yellow-100 text-yellow-700" : "bg-red-100 text-red-700"
-      )}>
-        {item.type}
-      </div>
-      <div className="flex flex-col sm:flex-row gap-4 pt-4">
-        <div className="flex-1 space-y-4">
-          <div className="flex gap-4 items-center">
-            <input
-              placeholder={`${item.type === 'skill' ? 'Skill' : 'Weapon'} Name`}
-              value={item.name}
-              onChange={(e) => updateItem(item.id, { name: e.target.value })}
-              readOnly={!isLoggedIn}
-              className={cn(
-                "flex-1 text-lg md:text-xl font-bold border-b-2 border-transparent focus:border-brand-200 focus:outline-none",
-                !isLoggedIn && "cursor-default"
-              )}
-            />
-            <div className={cn(
-              "p-2 rounded-xl shrink-0",
-              item.type === 'skill' ? "bg-yellow-50 text-yellow-600" : "bg-red-50 text-red-600"
-            )}>
-              {item.type === 'skill' ? <Zap size={20} /> : <Sword size={20} />}
-            </div>
-          </div>
-          <textarea
-            placeholder={isLoggedIn ? `Describe this ${item.type}...` : `No description for this ${item.type}.`}
-            value={item.description}
-            onChange={(e) => updateItem(item.id, { description: e.target.value })}
-            readOnly={!isLoggedIn}
-            className={cn(
-              "w-full h-24 bg-brand-50 rounded-2xl p-4 focus:outline-none focus:ring-2 ring-brand-200 resize-none text-sm md:text-base",
-              !isLoggedIn && "cursor-default"
-            )}
-          />
-        </div>
-        {isLoggedIn && (
-          <button onClick={() => removeItem(item.id)} className="text-brand-200 hover:text-red-400 self-end sm:self-start p-2">
-            <Trash2 size={20} />
-          </button>
-        )}
-      </div>
-    </div>
-  );
-}
-
 function PlotManager({ storyTitle, plotPoints, onUpdate, isLoggedIn }: { storyTitle: string; plotPoints: PlotPoint[]; onUpdate: (points: PlotPoint[]) => void; isLoggedIn: boolean }) {
   const sortedPlotPoints = useMemo(() => {
     return [...plotPoints].sort((a, b) => {
@@ -1870,19 +1657,29 @@ function WorldManager({
   storyTitle, 
   creatures, 
   locations, 
+  factions,
+  skills,
+  weapons,
   onUpdateCreatures, 
   onUpdateLocations, 
+  onUpdateFactions,
+  onUpdateSkills,
+  onUpdateWeapons,
   isLoggedIn 
 }: { 
   storyTitle: string; 
   creatures: Creature[]; 
   locations: Location[]; 
+  factions: Faction[];
+  skills: Skill[];
+  weapons: Weapon[];
   onUpdateCreatures: (creatures: Creature[]) => void; 
   onUpdateLocations: (locations: Location[]) => void; 
+  onUpdateFactions: (factions: Faction[]) => void;
+  onUpdateSkills: (skills: Skill[]) => void;
+  onUpdateWeapons: (weapons: Weapon[]) => void;
   isLoggedIn: boolean;
 }) {
-  const [activeSubTab, setActiveSubTab] = useState<'creatures' | 'locations'>('creatures');
-
   const addCreature = () => {
     const newCreature: Creature = {
       id: crypto.randomUUID(),
@@ -1924,222 +1721,538 @@ function WorldManager({
     onUpdateLocations(locations.filter(l => l.id !== id));
   };
 
+  const addFaction = () => {
+    const newFaction: Faction = {
+      id: crypto.randomUUID(),
+      name: 'New Faction',
+      leader: 'Unknown',
+      influence: 'Low',
+      alignment: 'neutral',
+      description: ''
+    };
+    onUpdateFactions([...factions, newFaction]);
+  };
+
+  const updateFaction = (id: string, updates: Partial<Faction>) => {
+    onUpdateFactions(factions.map(f => f.id === id ? { ...f, ...updates } : f));
+  };
+
+  const removeFaction = (id: string) => {
+    onUpdateFactions(factions.filter(f => f.id !== id));
+  };
+
+  const addSkill = () => {
+    const newSkill: Skill = {
+      id: crypto.randomUUID(),
+      name: 'New Skill',
+      category: 'Common',
+      description: ''
+    };
+    onUpdateSkills([...skills, newSkill]);
+  };
+
+  const updateSkill = (id: string, updates: Partial<Skill>) => {
+    onUpdateSkills(skills.map(s => s.id === id ? { ...s, ...updates } : s));
+  };
+
+  const removeSkill = (id: string) => {
+    onUpdateSkills(skills.filter(s => s.id !== id));
+  };
+
+  const addWeapon = () => {
+    const newWeapon: Weapon = {
+      id: crypto.randomUUID(),
+      name: 'New Weapon',
+      rarity: 'Common',
+      description: ''
+    };
+    onUpdateWeapons([...weapons, newWeapon]);
+  };
+
+  const updateWeapon = (id: string, updates: Partial<Weapon>) => {
+    onUpdateWeapons(weapons.map(w => w.id === id ? { ...w, ...updates } : w));
+  };
+
+  const removeWeapon = (id: string) => {
+    onUpdateWeapons(weapons.filter(w => w.id !== id));
+  };
+
   return (
-    <div className="space-y-6 md:space-y-8">
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <h2 className="text-xl md:text-2xl font-bold font-serif">{storyTitle}: World Building</h2>
-        <div className="flex bg-brand-100 p-1 rounded-2xl">
-          <button
-            onClick={() => setActiveSubTab('creatures')}
-            className={cn(
-              "px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2",
-              activeSubTab === 'creatures' ? "bg-white text-brand-900 shadow-sm" : "text-brand-500 hover:text-brand-700"
-            )}
-          >
-            <Ghost size={14} /> Bestiary
-          </button>
-          <button
-            onClick={() => setActiveSubTab('locations')}
-            className={cn(
-              "px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2",
-              activeSubTab === 'locations' ? "bg-white text-brand-900 shadow-sm" : "text-brand-500 hover:text-brand-700"
-            )}
-          >
-            <MapPin size={14} /> Locations
-          </button>
+    <div className="space-y-12 pb-20">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-brand-100 pb-6">
+        <div>
+          <h2 className="text-2xl md:text-3xl font-bold font-serif text-brand-900">{storyTitle}: World Codex</h2>
+          <p className="text-brand-500 text-sm mt-1">Manage all aspects of your world in one place.</p>
+        </div>
+        <div className="flex gap-2 overflow-x-auto no-scrollbar py-1">
+          <a href="#bestiary" className="px-3 py-1.5 bg-brand-50 text-brand-700 rounded-full text-xs font-bold hover:bg-brand-100 transition-colors whitespace-nowrap flex items-center gap-1.5">
+            <Ghost size={12} /> Bestiary
+          </a>
+          <a href="#locations" className="px-3 py-1.5 bg-brand-50 text-brand-700 rounded-full text-xs font-bold hover:bg-brand-100 transition-colors whitespace-nowrap flex items-center gap-1.5">
+            <MapPin size={12} /> Locations
+          </a>
+          <a href="#factions" className="px-3 py-1.5 bg-brand-50 text-brand-700 rounded-full text-xs font-bold hover:bg-brand-100 transition-colors whitespace-nowrap flex items-center gap-1.5">
+            <ShieldAlert size={12} /> Factions
+          </a>
+          <a href="#skills" className="px-3 py-1.5 bg-brand-50 text-brand-700 rounded-full text-xs font-bold hover:bg-brand-100 transition-colors whitespace-nowrap flex items-center gap-1.5">
+            <Zap size={12} /> Skills
+          </a>
+          <a href="#weapons" className="px-3 py-1.5 bg-brand-50 text-brand-700 rounded-full text-xs font-bold hover:bg-brand-100 transition-colors whitespace-nowrap flex items-center gap-1.5">
+            <Sword size={12} /> Weapons
+          </a>
         </div>
       </div>
 
-      {activeSubTab === 'creatures' ? (
-        <div className="space-y-6">
-          <div className="flex items-center justify-between">
-            <h3 className="text-lg font-bold text-brand-800 flex items-center gap-2">
-              <Ghost size={20} /> The Bestiary
-            </h3>
-            {isLoggedIn && (
-              <button onClick={addCreature} className="text-brand-600 hover:text-brand-800 font-medium text-sm flex items-center gap-1">
-                <Plus size={18} /> Add Creature
-              </button>
-            )}
-          </div>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {creatures.map(creature => (
-              <div key={creature.id} className="bg-white p-6 rounded-3xl border-2 border-brand-100 shadow-sm space-y-4 relative group">
-                {isLoggedIn && (
-                  <button 
-                    onClick={() => removeCreature(creature.id)}
-                    className="absolute top-4 right-4 text-brand-200 hover:text-red-500 transition-colors opacity-0 group-hover:opacity-100"
-                  >
-                    <Trash2 size={18} />
-                  </button>
-                )}
-                <div className="space-y-3">
-                  <input
-                    placeholder="Creature Name"
-                    value={creature.name}
-                    onChange={(e) => updateCreature(creature.id, { name: e.target.value })}
-                    readOnly={!isLoggedIn}
-                    className="w-full text-lg font-bold bg-transparent focus:outline-none placeholder:text-brand-200"
-                  />
-                  <div className="grid grid-cols-2 gap-3">
-                    <div className="space-y-1">
-                      <label className="text-[10px] font-bold text-brand-400 uppercase tracking-wider">Species</label>
-                      <input
-                        placeholder="e.g. Dragon"
-                        value={creature.species}
-                        onChange={(e) => updateCreature(creature.id, { species: e.target.value })}
-                        readOnly={!isLoggedIn}
-                        className="w-full text-xs bg-brand-50 rounded-lg p-2 focus:outline-none"
-                      />
-                    </div>
-                    <div className="space-y-1">
-                      <label className="text-[10px] font-bold text-brand-400 uppercase tracking-wider">Habitat</label>
-                      <input
-                        placeholder="e.g. Volcanic Peaks"
-                        value={creature.habitat}
-                        onChange={(e) => updateCreature(creature.id, { habitat: e.target.value })}
-                        readOnly={!isLoggedIn}
-                        className="w-full text-xs bg-brand-50 rounded-lg p-2 focus:outline-none"
-                      />
-                    </div>
-                  </div>
-                  <div className="space-y-1">
-                    <label className="text-[10px] font-bold text-brand-400 uppercase tracking-wider">Threat Level</label>
-                    <div className="flex gap-2">
-                      {(['low', 'medium', 'high', 'calamity'] as const).map(level => (
-                        <button
-                          key={level}
-                          onClick={() => updateCreature(creature.id, { threatLevel: level })}
-                          disabled={!isLoggedIn}
-                          className={cn(
-                            "flex-1 py-1 rounded-lg text-[10px] font-bold uppercase transition-all",
-                            creature.threatLevel === level 
-                              ? level === 'low' ? "bg-green-500 text-white" :
-                                level === 'medium' ? "bg-yellow-500 text-white" :
-                                level === 'high' ? "bg-orange-500 text-white" :
-                                "bg-red-600 text-white"
-                              : "bg-brand-50 text-brand-400 hover:bg-brand-100"
-                          )}
-                        >
-                          {level}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                  <div className="space-y-1">
-                    <label className="text-[10px] font-bold text-brand-400 uppercase tracking-wider">Abilities</label>
-                    <textarea
-                      placeholder="Magical powers, physical traits..."
-                      value={creature.abilities}
-                      onChange={(e) => updateCreature(creature.id, { abilities: e.target.value })}
+      {/* Bestiary Section */}
+      <section id="bestiary" className="space-y-6 scroll-mt-24">
+        <div className="flex items-center justify-between">
+          <h3 className="text-xl font-bold text-brand-800 flex items-center gap-3">
+            <div className="p-2 bg-brand-100 rounded-xl text-brand-600">
+              <Ghost size={24} />
+            </div>
+            The Bestiary
+          </h3>
+          {isLoggedIn && (
+            <button onClick={addCreature} className="bg-brand-800 text-white px-4 py-2 rounded-xl font-bold text-sm flex items-center gap-2 hover:bg-brand-700 transition-all shadow-sm">
+              <Plus size={18} /> Add Creature
+            </button>
+          )}
+        </div>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          {creatures.map(creature => (
+            <div key={creature.id} className="bg-white p-6 rounded-3xl border-2 border-brand-100 shadow-sm space-y-4 relative group hover:border-brand-300 transition-all">
+              {isLoggedIn && (
+                <button 
+                  onClick={() => removeCreature(creature.id)}
+                  className="absolute top-4 right-4 text-brand-200 hover:text-red-500 transition-colors opacity-0 group-hover:opacity-100"
+                >
+                  <Trash2 size={18} />
+                </button>
+              )}
+              <div className="space-y-4">
+                <input
+                  placeholder="Creature Name"
+                  value={creature.name}
+                  onChange={(e) => updateCreature(creature.id, { name: e.target.value })}
+                  readOnly={!isLoggedIn}
+                  className="w-full text-xl font-bold bg-transparent focus:outline-none placeholder:text-brand-200"
+                />
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-1.5">
+                    <label className="text-[10px] font-bold text-brand-400 uppercase tracking-wider">Species</label>
+                    <input
+                      placeholder="e.g. Dragon"
+                      value={creature.species}
+                      onChange={(e) => updateCreature(creature.id, { species: e.target.value })}
                       readOnly={!isLoggedIn}
-                      className="w-full text-xs bg-brand-50 rounded-lg p-2 focus:outline-none resize-none h-16"
+                      className="w-full text-xs bg-brand-50 rounded-xl p-3 focus:outline-none focus:ring-2 ring-brand-200"
                     />
                   </div>
-                  <div className="space-y-1">
-                    <label className="text-[10px] font-bold text-brand-400 uppercase tracking-wider">Description/Lore</label>
-                    <textarea
-                      placeholder="History, behavior, weaknesses..."
-                      value={creature.description}
-                      onChange={(e) => updateCreature(creature.id, { description: e.target.value })}
+                  <div className="space-y-1.5">
+                    <label className="text-[10px] font-bold text-brand-400 uppercase tracking-wider">Habitat</label>
+                    <input
+                      placeholder="e.g. Volcanic Peaks"
+                      value={creature.habitat}
+                      onChange={(e) => updateCreature(creature.id, { habitat: e.target.value })}
                       readOnly={!isLoggedIn}
-                      className="w-full text-xs bg-brand-50 rounded-lg p-2 focus:outline-none resize-none h-24"
+                      className="w-full text-xs bg-brand-50 rounded-xl p-3 focus:outline-none focus:ring-2 ring-brand-200"
                     />
                   </div>
                 </div>
-              </div>
-            ))}
-            {creatures.length === 0 && (
-              <div className="col-span-full text-center py-12 bg-white rounded-3xl border-2 border-dashed border-brand-100 text-brand-400">
-                No creatures discovered yet. What lurks in the shadows?
-              </div>
-            )}
-          </div>
-        </div>
-      ) : (
-        <div className="space-y-6">
-          <div className="flex items-center justify-between">
-            <h3 className="text-lg font-bold text-brand-800 flex items-center gap-2">
-              <MapPin size={20} /> Locations
-            </h3>
-            {isLoggedIn && (
-              <button onClick={addLocation} className="text-brand-600 hover:text-brand-800 font-medium text-sm flex items-center gap-1">
-                <Plus size={18} /> Add Location
-              </button>
-            )}
-          </div>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {locations.map(location => (
-              <div key={location.id} className="bg-white p-6 rounded-3xl border-2 border-brand-100 shadow-sm space-y-4 relative group">
-                {isLoggedIn && (
-                  <button 
-                    onClick={() => removeLocation(location.id)}
-                    className="absolute top-4 right-4 text-brand-200 hover:text-red-500 transition-colors opacity-0 group-hover:opacity-100"
-                  >
-                    <Trash2 size={18} />
-                  </button>
-                )}
-                <div className="space-y-3">
-                  <input
-                    placeholder="Location Name"
-                    value={location.name}
-                    onChange={(e) => updateLocation(location.id, { name: e.target.value })}
-                    readOnly={!isLoggedIn}
-                    className="w-full text-lg font-bold bg-transparent focus:outline-none placeholder:text-brand-200"
-                  />
-                  <div className="grid grid-cols-2 gap-3">
-                    <div className="space-y-1">
-                      <label className="text-[10px] font-bold text-brand-400 uppercase tracking-wider">Climate</label>
-                      <input
-                        placeholder="e.g. Tropical"
-                        value={location.climate}
-                        onChange={(e) => updateLocation(location.id, { climate: e.target.value })}
-                        readOnly={!isLoggedIn}
-                        className="w-full text-xs bg-brand-50 rounded-lg p-2 focus:outline-none"
-                      />
-                    </div>
-                    <div className="space-y-1">
-                      <label className="text-[10px] font-bold text-brand-400 uppercase tracking-wider">Ruling Power</label>
-                      <input
-                        placeholder="e.g. The Sun Empire"
-                        value={location.rulingPower}
-                        onChange={(e) => updateLocation(location.id, { rulingPower: e.target.value })}
-                        readOnly={!isLoggedIn}
-                        className="w-full text-xs bg-brand-50 rounded-lg p-2 focus:outline-none"
-                      />
-                    </div>
+                <div className="space-y-1.5">
+                  <label className="text-[10px] font-bold text-brand-400 uppercase tracking-wider">Threat Level</label>
+                  <div className="flex gap-2">
+                    {(['low', 'medium', 'high', 'calamity'] as const).map(level => (
+                      <button
+                        key={level}
+                        onClick={() => updateCreature(creature.id, { threatLevel: level })}
+                        disabled={!isLoggedIn}
+                        className={cn(
+                          "flex-1 py-2 rounded-xl text-[10px] font-bold uppercase transition-all",
+                          creature.threatLevel === level 
+                            ? level === 'low' ? "bg-green-500 text-white shadow-md shadow-green-100" :
+                              level === 'medium' ? "bg-yellow-500 text-white shadow-md shadow-yellow-100" :
+                              level === 'high' ? "bg-orange-500 text-white shadow-md shadow-orange-100" :
+                              "bg-red-600 text-white shadow-md shadow-red-100"
+                            : "bg-brand-50 text-brand-400 hover:bg-brand-100"
+                        )}
+                      >
+                        {level}
+                      </button>
+                    ))}
                   </div>
-                  <div className="space-y-1">
-                    <label className="text-[10px] font-bold text-brand-400 uppercase tracking-wider">Lore/History</label>
-                    <textarea
-                      placeholder="Ancient legends, historical events..."
-                      value={location.lore}
-                      onChange={(e) => updateLocation(location.id, { lore: e.target.value })}
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-[10px] font-bold text-brand-400 uppercase tracking-wider">Abilities</label>
+                  <textarea
+                    placeholder="Magical powers, physical traits..."
+                    value={creature.abilities}
+                    onChange={(e) => updateCreature(creature.id, { abilities: e.target.value })}
+                    readOnly={!isLoggedIn}
+                    className="w-full text-xs bg-brand-50 rounded-xl p-3 focus:outline-none focus:ring-2 ring-brand-200 resize-none h-20"
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-[10px] font-bold text-brand-400 uppercase tracking-wider">Description/Lore</label>
+                  <textarea
+                    placeholder="History, behavior, weaknesses..."
+                    value={creature.description}
+                    onChange={(e) => updateCreature(creature.id, { description: e.target.value })}
+                    readOnly={!isLoggedIn}
+                    className="w-full text-xs bg-brand-50 rounded-xl p-3 focus:outline-none focus:ring-2 ring-brand-200 resize-none h-28"
+                  />
+                </div>
+              </div>
+            </div>
+          ))}
+          {creatures.length === 0 && (
+            <div className="col-span-full text-center py-16 bg-white rounded-3xl border-2 border-dashed border-brand-100 text-brand-400">
+              <Ghost size={40} className="mx-auto mb-4 opacity-20" />
+              No creatures discovered yet. What lurks in the shadows?
+            </div>
+          )}
+        </div>
+      </section>
+
+      {/* Locations Section */}
+      <section id="locations" className="space-y-6 scroll-mt-24 pt-12 border-t border-brand-50">
+        <div className="flex items-center justify-between">
+          <h3 className="text-xl font-bold text-brand-800 flex items-center gap-3">
+            <div className="p-2 bg-brand-100 rounded-xl text-brand-600">
+              <MapPin size={24} />
+            </div>
+            Locations
+          </h3>
+          {isLoggedIn && (
+            <button onClick={addLocation} className="bg-brand-800 text-white px-4 py-2 rounded-xl font-bold text-sm flex items-center gap-2 hover:bg-brand-700 transition-all shadow-sm">
+              <Plus size={18} /> Add Location
+            </button>
+          )}
+        </div>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          {locations.map(location => (
+            <div key={location.id} className="bg-white p-6 rounded-3xl border-2 border-brand-100 shadow-sm space-y-4 relative group hover:border-brand-300 transition-all">
+              {isLoggedIn && (
+                <button 
+                  onClick={() => removeLocation(location.id)}
+                  className="absolute top-4 right-4 text-brand-200 hover:text-red-500 transition-colors opacity-0 group-hover:opacity-100"
+                >
+                  <Trash2 size={18} />
+                </button>
+              )}
+              <div className="space-y-4">
+                <input
+                  placeholder="Location Name"
+                  value={location.name}
+                  onChange={(e) => updateLocation(location.id, { name: e.target.value })}
+                  readOnly={!isLoggedIn}
+                  className="w-full text-xl font-bold bg-transparent focus:outline-none placeholder:text-brand-200"
+                />
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-1.5">
+                    <label className="text-[10px] font-bold text-brand-400 uppercase tracking-wider">Climate</label>
+                    <input
+                      placeholder="e.g. Tropical"
+                      value={location.climate}
+                      onChange={(e) => updateLocation(location.id, { climate: e.target.value })}
                       readOnly={!isLoggedIn}
-                      className="w-full text-xs bg-brand-50 rounded-lg p-2 focus:outline-none resize-none h-20"
+                      className="w-full text-xs bg-brand-50 rounded-xl p-3 focus:outline-none focus:ring-2 ring-brand-200"
                     />
                   </div>
-                  <div className="space-y-1">
-                    <label className="text-[10px] font-bold text-brand-400 uppercase tracking-wider">Description</label>
-                    <textarea
-                      placeholder="Geography, atmosphere, landmarks..."
-                      value={location.description}
-                      onChange={(e) => updateLocation(location.id, { description: e.target.value })}
+                  <div className="space-y-1.5">
+                    <label className="text-[10px] font-bold text-brand-400 uppercase tracking-wider">Ruling Power</label>
+                    <input
+                      placeholder="e.g. The Sun Empire"
+                      value={location.rulingPower}
+                      onChange={(e) => updateLocation(location.id, { rulingPower: e.target.value })}
                       readOnly={!isLoggedIn}
-                      className="w-full text-xs bg-brand-50 rounded-lg p-2 focus:outline-none resize-none h-24"
+                      className="w-full text-xs bg-brand-50 rounded-xl p-3 focus:outline-none focus:ring-2 ring-brand-200"
                     />
                   </div>
                 </div>
+                <div className="space-y-1.5">
+                  <label className="text-[10px] font-bold text-brand-400 uppercase tracking-wider">Lore/History</label>
+                  <textarea
+                    placeholder="Ancient legends, historical events..."
+                    value={location.lore}
+                    onChange={(e) => updateLocation(location.id, { lore: e.target.value })}
+                    readOnly={!isLoggedIn}
+                    className="w-full text-xs bg-brand-50 rounded-xl p-3 focus:outline-none focus:ring-2 ring-brand-200 resize-none h-24"
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-[10px] font-bold text-brand-400 uppercase tracking-wider">Description</label>
+                  <textarea
+                    placeholder="Geography, atmosphere, landmarks..."
+                    value={location.description}
+                    onChange={(e) => updateLocation(location.id, { description: e.target.value })}
+                    readOnly={!isLoggedIn}
+                    className="w-full text-xs bg-brand-50 rounded-xl p-3 focus:outline-none focus:ring-2 ring-brand-200 resize-none h-28"
+                  />
+                </div>
               </div>
-            ))}
-            {locations.length === 0 && (
-              <div className="col-span-full text-center py-12 bg-white rounded-3xl border-2 border-dashed border-brand-100 text-brand-400">
-                The map is blank. Where does the journey begin?
-              </div>
-            )}
-          </div>
+            </div>
+          ))}
+          {locations.length === 0 && (
+            <div className="col-span-full text-center py-16 bg-white rounded-3xl border-2 border-dashed border-brand-100 text-brand-400">
+              <MapPin size={40} className="mx-auto mb-4 opacity-20" />
+              The map is blank. Where does the journey begin?
+            </div>
+          )}
         </div>
-      )}
+      </section>
+
+      {/* Factions Section */}
+      <section id="factions" className="space-y-6 scroll-mt-24 pt-12 border-t border-brand-50">
+        <div className="flex items-center justify-between">
+          <h3 className="text-xl font-bold text-brand-800 flex items-center gap-3">
+            <div className="p-2 bg-brand-100 rounded-xl text-brand-600">
+              <ShieldAlert size={24} />
+            </div>
+            Factions & Empires
+          </h3>
+          {isLoggedIn && (
+            <button onClick={addFaction} className="bg-brand-800 text-white px-4 py-2 rounded-xl font-bold text-sm flex items-center gap-2 hover:bg-brand-700 transition-all shadow-sm">
+              <Plus size={18} /> Add Faction
+            </button>
+          )}
+        </div>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          {factions.map(faction => (
+            <div key={faction.id} className="bg-white p-6 rounded-3xl border-2 border-brand-100 shadow-sm space-y-4 relative group hover:border-brand-300 transition-all">
+              {isLoggedIn && (
+                <button 
+                  onClick={() => removeFaction(faction.id)}
+                  className="absolute top-4 right-4 text-brand-200 hover:text-red-500 transition-colors opacity-0 group-hover:opacity-100"
+                >
+                  <Trash2 size={18} />
+                </button>
+              )}
+              <div className="space-y-4">
+                <input
+                  placeholder="Faction Name"
+                  value={faction.name}
+                  onChange={(e) => updateFaction(faction.id, { name: e.target.value })}
+                  readOnly={!isLoggedIn}
+                  className="w-full text-xl font-bold bg-transparent focus:outline-none placeholder:text-brand-200"
+                />
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-1.5">
+                    <label className="text-[10px] font-bold text-brand-400 uppercase tracking-wider">Leader</label>
+                    <input
+                      placeholder="e.g. Emperor Sol"
+                      value={faction.leader}
+                      onChange={(e) => updateFaction(faction.id, { leader: e.target.value })}
+                      readOnly={!isLoggedIn}
+                      className="w-full text-xs bg-brand-50 rounded-xl p-3 focus:outline-none focus:ring-2 ring-brand-200"
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <label className="text-[10px] font-bold text-brand-400 uppercase tracking-wider">Influence</label>
+                    <input
+                      placeholder="e.g. Continental"
+                      value={faction.influence}
+                      onChange={(e) => updateFaction(faction.id, { influence: e.target.value })}
+                      readOnly={!isLoggedIn}
+                      className="w-full text-xs bg-brand-50 rounded-xl p-3 focus:outline-none focus:ring-2 ring-brand-200"
+                    />
+                  </div>
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-[10px] font-bold text-brand-400 uppercase tracking-wider">Alignment</label>
+                  <div className="flex gap-2">
+                    {(['ally', 'neutral', 'enemy'] as const).map(align => (
+                      <button
+                        key={align}
+                        onClick={() => updateFaction(faction.id, { alignment: align })}
+                        disabled={!isLoggedIn}
+                        className={cn(
+                          "flex-1 py-2 rounded-xl text-[10px] font-bold uppercase transition-all",
+                          faction.alignment === align 
+                            ? align === 'ally' ? "bg-blue-500 text-white shadow-md shadow-blue-100" :
+                              align === 'neutral' ? "bg-gray-500 text-white shadow-md shadow-gray-100" :
+                              "bg-red-500 text-white shadow-md shadow-red-100"
+                            : "bg-brand-50 text-brand-400 hover:bg-brand-100"
+                        )}
+                      >
+                        {align}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-[10px] font-bold text-brand-400 uppercase tracking-wider">Description & Goals</label>
+                  <textarea
+                    placeholder="Their agenda, history, and relationship with the protagonist..."
+                    value={faction.description}
+                    onChange={(e) => updateFaction(faction.id, { description: e.target.value })}
+                    readOnly={!isLoggedIn}
+                    className="w-full text-xs bg-brand-50 rounded-xl p-3 focus:outline-none focus:ring-2 ring-brand-200 resize-none h-28"
+                  />
+                </div>
+              </div>
+            </div>
+          ))}
+          {factions.length === 0 && (
+            <div className="col-span-full text-center py-16 bg-white rounded-3xl border-2 border-dashed border-brand-100 text-brand-400">
+              <ShieldAlert size={40} className="mx-auto mb-4 opacity-20" />
+              No factions recorded. Who holds the power in this world?
+            </div>
+          )}
+        </div>
+      </section>
+
+      {/* Skills Section */}
+      <section id="skills" className="space-y-6 scroll-mt-24 pt-12 border-t border-brand-50">
+        <div className="flex items-center justify-between">
+          <h3 className="text-xl font-bold text-brand-800 flex items-center gap-3">
+            <div className="p-2 bg-brand-100 rounded-xl text-brand-600">
+              <Zap size={24} />
+            </div>
+            Skills & Magic
+          </h3>
+          {isLoggedIn && (
+            <button onClick={addSkill} className="bg-brand-800 text-white px-4 py-2 rounded-xl font-bold text-sm flex items-center gap-2 hover:bg-brand-700 transition-all shadow-sm">
+              <Plus size={18} /> Add Skill
+            </button>
+          )}
+        </div>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          {skills.map(skill => (
+            <div key={skill.id} className="bg-white p-6 rounded-3xl border-2 border-brand-100 shadow-sm space-y-4 relative group hover:border-brand-300 transition-all">
+              {isLoggedIn && (
+                <button 
+                  onClick={() => removeSkill(skill.id)}
+                  className="absolute top-4 right-4 text-brand-200 hover:text-red-500 transition-colors opacity-0 group-hover:opacity-100"
+                >
+                  <Trash2 size={18} />
+                </button>
+              )}
+              <div className="space-y-4">
+                <input
+                  placeholder="Skill Name"
+                  value={skill.name}
+                  onChange={(e) => updateSkill(skill.id, { name: e.target.value })}
+                  readOnly={!isLoggedIn}
+                  className="w-full text-xl font-bold bg-transparent focus:outline-none placeholder:text-brand-200"
+                />
+                <div className="space-y-1.5">
+                  <label className="text-[10px] font-bold text-brand-400 uppercase tracking-wider">Category</label>
+                  <div className="flex flex-wrap gap-2">
+                    {(['Common', 'Extra', 'Unique', 'Ultimate', 'Ancient', 'Legendary'] as const).map(cat => (
+                      <button
+                        key={cat}
+                        onClick={() => updateSkill(skill.id, { category: cat })}
+                        disabled={!isLoggedIn}
+                        className={cn(
+                          "px-3 py-1.5 rounded-xl text-[10px] font-bold uppercase transition-all",
+                          skill.category === cat 
+                            ? "bg-brand-800 text-white shadow-md shadow-brand-200" 
+                            : "bg-brand-50 text-brand-400 hover:bg-brand-100"
+                        )}
+                      >
+                        {cat}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-[10px] font-bold text-brand-400 uppercase tracking-wider">Description & Effects</label>
+                  <textarea
+                    placeholder="What does this skill do? How is it activated?"
+                    value={skill.description}
+                    onChange={(e) => updateSkill(skill.id, { description: e.target.value })}
+                    readOnly={!isLoggedIn}
+                    className="w-full text-xs bg-brand-50 rounded-xl p-3 focus:outline-none focus:ring-2 ring-brand-200 resize-none h-28"
+                  />
+                </div>
+              </div>
+            </div>
+          ))}
+          {skills.length === 0 && (
+            <div className="col-span-full text-center py-16 bg-white rounded-3xl border-2 border-dashed border-brand-100 text-brand-400">
+              <Zap size={40} className="mx-auto mb-4 opacity-20" />
+              No skills documented. What powers do your characters possess?
+            </div>
+          )}
+        </div>
+      </section>
+
+      {/* Weapons Section */}
+      <section id="weapons" className="space-y-6 scroll-mt-24 pt-12 border-t border-brand-50">
+        <div className="flex items-center justify-between">
+          <h3 className="text-xl font-bold text-brand-800 flex items-center gap-3">
+            <div className="p-2 bg-brand-100 rounded-xl text-brand-600">
+              <Sword size={24} />
+            </div>
+            Legendary Weapons
+          </h3>
+          {isLoggedIn && (
+            <button onClick={addWeapon} className="bg-brand-800 text-white px-4 py-2 rounded-xl font-bold text-sm flex items-center gap-2 hover:bg-brand-700 transition-all shadow-sm">
+              <Plus size={18} /> Add Weapon
+            </button>
+          )}
+        </div>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          {weapons.map(weapon => (
+            <div key={weapon.id} className="bg-white p-6 rounded-3xl border-2 border-brand-100 shadow-sm space-y-4 relative group hover:border-brand-300 transition-all">
+              {isLoggedIn && (
+                <button 
+                  onClick={() => removeWeapon(weapon.id)}
+                  className="absolute top-4 right-4 text-brand-200 hover:text-red-500 transition-colors opacity-0 group-hover:opacity-100"
+                >
+                  <Trash2 size={18} />
+                </button>
+              )}
+              <div className="space-y-4">
+                <input
+                  placeholder="Weapon Name"
+                  value={weapon.name}
+                  onChange={(e) => updateWeapon(weapon.id, { name: e.target.value })}
+                  readOnly={!isLoggedIn}
+                  className="w-full text-xl font-bold bg-transparent focus:outline-none placeholder:text-brand-200"
+                />
+                <div className="space-y-1.5">
+                  <label className="text-[10px] font-bold text-brand-400 uppercase tracking-wider">Rarity</label>
+                  <div className="flex flex-wrap gap-2">
+                    {(['Common', 'Rare', 'Super Rare', 'Legendary', 'Mythical'] as const).map(rarity => (
+                      <button
+                        key={rarity}
+                        onClick={() => updateWeapon(weapon.id, { rarity: rarity })}
+                        disabled={!isLoggedIn}
+                        className={cn(
+                          "px-3 py-1.5 rounded-xl text-[10px] font-bold uppercase transition-all",
+                          weapon.rarity === rarity 
+                            ? "bg-brand-800 text-white shadow-md shadow-brand-200" 
+                            : "bg-brand-50 text-brand-400 hover:bg-brand-100"
+                        )}
+                      >
+                        {rarity}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-[10px] font-bold text-brand-400 uppercase tracking-wider">Description & History</label>
+                  <textarea
+                    placeholder="Who forged it? What are its unique properties?"
+                    value={weapon.description}
+                    onChange={(e) => updateWeapon(weapon.id, { description: e.target.value })}
+                    readOnly={!isLoggedIn}
+                    className="w-full text-xs bg-brand-50 rounded-xl p-3 focus:outline-none focus:ring-2 ring-brand-200 resize-none h-28"
+                  />
+                </div>
+              </div>
+            </div>
+          ))}
+          {weapons.length === 0 && (
+            <div className="col-span-full text-center py-16 bg-white rounded-3xl border-2 border-dashed border-brand-100 text-brand-400">
+              <Sword size={40} className="mx-auto mb-4 opacity-20" />
+              The armory is empty. What legendary steel will your heroes wield?
+            </div>
+          )}
+        </div>
+      </section>
     </div>
   );
 }
@@ -2183,9 +2296,11 @@ function AiMuse({ story, currentChapter }: { story: Story; currentChapter?: Chap
         Subtitle: "${story.subtitle || 'None'}"
         Genres: ${story.genres?.join(', ') || 'None'}
         Characters: ${story.characters.map(c => `${c.name} (${c.role}): ${c.description}`).join(', ')}
-        Skills & Weapons: ${story.skillsAndWeapons?.map(i => `${i.name} (${i.type}): ${i.description}`).join(', ') || 'None'}
+        Skills: ${story.skills?.map(s => `${s.name} (${s.category}): ${s.description}`).join(', ') || 'None'}
+        Weapons: ${story.weapons?.map(w => `${w.name} (${w.rarity}): ${w.description}`).join(', ') || 'None'}
         Creatures (Bestiary): ${story.creatures?.map(c => `${c.name} (${c.species}): ${c.description}`).join(', ') || 'None'}
         Locations: ${story.locations?.map(l => `${l.name} (${l.climate}): ${l.description}`).join(', ') || 'None'}
+        Factions: ${story.factions?.map(f => `${f.name} (Leader: ${f.leader}, Influence: ${f.influence}): ${f.description}`).join(', ') || 'None'}
         
         PREVIOUS CHAPTERS CONTEXT:
         ${previousChaptersContext || 'This is the first chapter.'}

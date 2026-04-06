@@ -25,13 +25,6 @@ export interface Chapter {
   deletedAt?: number;
 }
 
-export interface SkillOrWeapon {
-  id: string;
-  type: 'skill' | 'weapon';
-  name: string;
-  description: string;
-}
-
 export interface Creature {
   id: string;
   name: string;
@@ -51,6 +44,29 @@ export interface Location {
   description: string;
 }
 
+export interface Faction {
+  id: string;
+  name: string;
+  leader: string;
+  influence: string;
+  alignment: 'ally' | 'neutral' | 'enemy';
+  description: string;
+}
+
+export interface Skill {
+  id: string;
+  name: string;
+  category: 'Common' | 'Extra' | 'Unique' | 'Ultimate' | 'Ancient' | 'Legendary';
+  description: string;
+}
+
+export interface Weapon {
+  id: string;
+  name: string;
+  rarity: 'Common' | 'Rare' | 'Super Rare' | 'Legendary' | 'Mythical';
+  description: string;
+}
+
 export interface Story {
   id: string;
   title: string;
@@ -59,9 +75,11 @@ export interface Story {
   lastModified: number;
   characters: Character[];
   chapters: Chapter[];
-  skillsAndWeapons?: SkillOrWeapon[];
   creatures?: Creature[];
   locations?: Location[];
+  factions?: Faction[];
+  skills?: Skill[];
+  weapons?: Weapon[];
   summary?: string;
   isDeleted?: boolean;
   deletedAt?: number;
