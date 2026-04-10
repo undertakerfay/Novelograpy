@@ -169,10 +169,9 @@ function AppContent() {
       try {
         await getDocFromServer(doc(db, 'test', 'connection'));
       } catch (error) {
-        if (error instanceof Error && error.message.includes('the client is offline')) {
-          console.error("Please check your Firebase configuration. The client is offline.");
+        if (error instanceof Error && (error.message.includes('the client is offline') || error.message.includes('unavailable'))) {
+          console.error("Firestore connection issue. The client might be offline or the service is unavailable.");
         }
-        // Other errors are expected if the document doesn't exist, so we only log specific connection issues
       }
     };
     testConnection();
@@ -201,19 +200,6 @@ function AppContent() {
     return () => unsubscribe();
   }, [isAuthReady, isLoggedIn, user]);
 
-  // Test Connection
-  useEffect(() => {
-    const testConnection = async () => {
-      try {
-        await getDocFromServer(doc(db, 'test', 'connection'));
-      } catch (error) {
-        if (error instanceof Error && error.message.includes('the client is offline')) {
-          console.error("Please check your Firebase configuration.");
-        }
-      }
-    };
-    testConnection();
-  }, []);
 
   const handleLogout = async () => {
     try {
@@ -845,11 +831,22 @@ function EditorView({ story, onBack, onUpdate, isLoggedIn }: {
   };
 
   const currentChapter = story.chapters.find(c => c.id === currentChapterId && !c.isDeleted) || activeChapters[0];
+  const [localContent, setLocalContent] = useState(currentChapter?.content || '');
+
+  useEffect(() => {
+    setLocalContent(currentChapter?.content || '');
+  }, [currentChapter?.id]);
 
   const updateChapter = (chapterId: string, updates: Partial<Chapter>) => {
     onUpdate({
       chapters: story.chapters.map(c => c.id === chapterId ? { ...c, ...updates } : c)
     });
+  };
+
+  const handleContentChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    const newContent = e.target.value;
+    setLocalContent(newContent);
+    updateChapter(currentChapter.id, { content: newContent });
   };
 
   const addChapter = () => {
@@ -1205,8 +1202,8 @@ function EditorView({ story, onBack, onUpdate, isLoggedIn }: {
                   placeholder="Chapter Title"
                 />
                 <textarea
-                  value={currentChapter.content}
-                  onChange={(e) => updateChapter(currentChapter.id, { content: e.target.value })}
+                  value={localContent}
+                  onChange={handleContentChange}
                   readOnly={!isLoggedIn}
                   className={cn(
                     "w-full flex-1 min-h-[60vh] bg-transparent border-none focus:outline-none resize-none writing-area placeholder:text-brand-200",
