@@ -23,6 +23,8 @@ export interface Chapter {
   order: number;
   isDeleted?: boolean;
   deletedAt?: number;
+  completions?: number;
+  isPublished?: boolean;
 }
 
 export interface Creature {

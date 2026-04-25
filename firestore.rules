@@ -1,103 +1,93 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    // ===============================================================
-    // Assumed Data Model
-    // ===============================================================
-    //
-    // Collection: users
-    // Document ID: userId (UID)
-    // Fields:
-    //   - email: string (required) - User's email address
-    //   - role: string (required, enum: ['admin', 'user']) - User's role
-    //
-    // Collection: stories
-    // Document ID: storyId (UUID)
-    // Fields:
-    //   - title: string (required, max 100 chars) - The title of the novel
-    //   - subtitle: string (optional, max 200 chars) - The subtitle of the novel
-    //   - lastModified: number (required) - Timestamp of last modification
-    //   - characters: array (optional) - List of character objects
-    //   - chapters: array (optional) - List of chapter objects
-    //   - skillsAndWeapons: array (optional) - List of skill/weapon objects
-    //   - summary: string (optional, max 2000 chars) - A summary of the story
-    //   - isDeleted: boolean (optional) - Whether the story is in the recycle bin
-    //   - deletedAt: number (optional) - Timestamp when the story was deleted
-    //   - isPinned: boolean (optional) - Whether the story is pinned
-    //   - ownerId: string (required) - The UID of the user who owns this story
-    //
-    // ===============================================================
+    // Global safety net: default-deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
 
-    // ===============================================================
     // Helper Functions
-    // ===============================================================
-
-    function isAuthenticated() {
+    function isSignedIn() {
       return request.auth != null;
     }
 
     function isOwner(userId) {
-      return isAuthenticated() && request.auth.uid == userId;
+      return isSignedIn() && request.auth.uid == userId;
     }
 
     function isAdmin() {
-      return isAuthenticated() &&
-        (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin' ||
+      return isSignedIn() &&
+        (exists(/databases/$(database)/documents/admins/$(request.auth.uid)) ||
           (request.auth.token.email == "mdalaminsifat2022@gmail.com" && request.auth.token.email_verified == true));
     }
 
-    function hasRequiredFields(fields) {
-      return request.resource.data.keys().hasAll(fields);
+    function isValidId(id) {
+      return id is string && id.size() <= 128;
     }
 
-    function hasOnlyAllowedFields(fields) {
-      return request.resource.data.keys().hasOnly(fields);
+    function incoming() {
+      return request.resource.data;
     }
 
-    function isValidEmail(email) {
-      return email is string && email.matches("^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$");
+    function existing() {
+      return resource.data;
     }
 
-    // ===============================================================
     // Domain Validators
-    // ===============================================================
-
-    function isValidUser(data) {
-      return hasOnlyAllowedFields(['email', 'role']) &&
-             data.email is string && isValidEmail(data.email) &&
-             data.role in ['admin', 'user'];
-    }
-
     function isValidStory(data) {
-      return hasRequiredFields(['title', 'lastModified', 'ownerId']) &&
-             data.title is string && data.title.size() <= 100 &&
+      return data.keys().hasAll(['title', 'lastModified', 'ownerId']) &&
+             data.title is string && data.title.size() <= 200 &&
              (!('subtitle' in data) || (data.subtitle is string && data.subtitle.size() <= 200)) &&
              data.lastModified is number &&
              data.ownerId is string &&
-             (!('summary' in data) || (data.summary is string && data.summary.size() <= 2000)) &&
+             (!('summary' in data) || (data.summary is string && data.summary.size() <= 6000)) &&
              (!('isDeleted' in data) || data.isDeleted is bool) &&
-             (!('isPinned' in data) || data.isPinned is bool);
+             (!('isPublished' in data) || data.isPublished is bool) &&
+             (!('isPinned' in data) || data.isPinned is bool) &&
+             (!('genres' in data) || data.genres is list) &&
+             (!('chapters' in data) || data.chapters is list) &&
+             (!('characters' in data) || data.characters is list) &&
+             (!('creatures' in data) || data.creatures is list) &&
+             (!('locations' in data) || data.locations is list) &&
+             (!('factions' in data) || data.factions is list) &&
+             (!('skills' in data) || data.skills is list) &&
+             (!('weapons' in data) || data.weapons is list);
     }
 
-    // ===============================================================
-    // Match Rules
-    // ===============================================================
+    // Connection check document - must be public for the check to work
+    match /test/connection {
+      allow read: if true;
+    }
 
     match /users/{userId} {
-      allow read: if isAuthenticated();
-      allow create: if isAuthenticated() && isValidUser(request.resource.data) && (isOwner(userId) || isAdmin());
-      allow update: if isAuthenticated() && isValidUser(request.resource.data) && (isOwner(userId) || isAdmin());
-      allow delete: if isAdmin();
+      allow read: if isSignedIn() && (isOwner(userId) || isAdmin());
+      // Admin collection for role lookups
+      match /private/{document=**} {
+        allow read, write: if isAdmin();
+      }
+    }
+    
+    match /admins/{userId} {
+      allow read: if isSignedIn();
     }
 
     match /stories/{storyId} {
-      // Readers can read stories that are not deleted
-      allow read: if true;
+      // Allow listing published stories for everyone, or all for owner/admin
+      allow list: if (resource.data.isPublished == true) || isSignedIn();
       
-      // Only owners or admins can create/update/delete
-      allow create: if isAuthenticated() && isValidStory(request.resource.data) && (request.resource.data.ownerId == request.auth.uid || isAdmin());
-      allow update: if isAuthenticated() && isValidStory(request.resource.data) && (resource.data.ownerId == request.auth.uid || isAdmin());
-      allow delete: if isAuthenticated() && (resource.data.ownerId == request.auth.uid || isAdmin());
+      // Get: public stories or owner
+      allow get: if (resource.data.isPublished == true) || isOwner(resource.data.ownerId) || isAdmin();
+      
+      allow create: if isSignedIn() && 
+                      isValidStory(incoming()) && 
+                      isOwner(incoming().ownerId);
+                      
+      allow update: if (isSignedIn() && (isOwner(existing().ownerId) || isAdmin()) && isValidStory(incoming()) && incoming().ownerId == existing().ownerId) ||
+                      (existing().isPublished == true && 
+                       incoming().diff(existing()).affectedKeys().hasOnly(['chapters']) &&
+                       isValidStory(incoming()));
+                      
+      allow delete: if isSignedIn() && (isOwner(existing().ownerId) || isAdmin());
     }
   }
 }

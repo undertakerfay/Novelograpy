@@ -7,6 +7,7 @@
       "properties": {
         "title": { "type": "string", "description": "The title of the novel." },
         "subtitle": { "type": "string", "description": "The subtitle of the novel." },
+        "genres": { "type": "array", "items": { "type": "string" } },
         "lastModified": { "type": "number", "description": "Timestamp of the last modification." },
         "characters": { 
           "type": "array", 
@@ -18,15 +19,31 @@
           "items": { "$ref": "Chapter" },
           "description": "List of chapters in the story."
         },
-        "skillsAndWeapons": { 
+        "creatures": { 
           "type": "array", 
-          "items": { "$ref": "SkillOrWeapon" },
-          "description": "List of skills and weapons in the story."
+          "items": { "$ref": "Creature" }
+        },
+        "locations": { 
+          "type": "array", 
+          "items": { "$ref": "Location" }
+        },
+        "factions": { 
+          "type": "array", 
+          "items": { "$ref": "Faction" }
+        },
+        "skills": { 
+          "type": "array", 
+          "items": { "$ref": "Skill" }
+        },
+        "weapons": { 
+          "type": "array", 
+          "items": { "$ref": "Weapon" }
         },
         "summary": { "type": "string", "description": "A summary of the story." },
         "isDeleted": { "type": "boolean", "description": "Whether the story is in the recycle bin." },
         "deletedAt": { "type": "number", "description": "Timestamp when the story was deleted." },
         "isPinned": { "type": "boolean", "description": "Whether the story is pinned to the top." },
+        "isPublished": { "type": "boolean" },
         "ownerId": { "type": "string", "description": "The UID of the user who owns this story." }
       },
       "required": ["title", "lastModified", "ownerId"]
@@ -56,7 +73,9 @@
         "plotPoints": { "type": "array", "items": { "$ref": "PlotPoint" } },
         "order": { "type": "number" },
         "isDeleted": { "type": "boolean" },
-        "deletedAt": { "type": "number" }
+        "deletedAt": { "type": "number" },
+        "completions": { "type": "number" },
+        "isPublished": { "type": "boolean" }
       }
     },
     "PlotPoint": {
@@ -70,14 +89,65 @@
         "isCompleted": { "type": "boolean" }
       }
     },
-    "SkillOrWeapon": {
-      "title": "SkillOrWeapon",
-      "description": "A skill or weapon associated with a character or story.",
+    "Creature": {
+      "title": "Creature",
+      "description": "A fantastical beast or creature.",
       "type": "object",
       "properties": {
         "id": { "type": "string" },
-        "type": { "type": "string", "enum": ["skill", "weapon"] },
         "name": { "type": "string" },
+        "species": { "type": "string" },
+        "habitat": { "type": "string" },
+        "abilities": { "type": "string" },
+        "threatLevel": { "type": "string", "enum": ["low", "medium", "high", "calamity"] },
+        "description": { "type": "string" }
+      }
+    },
+    "Location": {
+      "title": "Location",
+      "description": "A geographic setting.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "climate": { "type": "string" },
+        "rulingPower": { "type": "string" },
+        "lore": { "type": "string" },
+        "description": { "type": "string" }
+      }
+    },
+    "Faction": {
+      "title": "Faction",
+      "description": "A group or organization.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "leader": { "type": "string" },
+        "influence": { "type": "string" },
+        "alignment": { "type": "string", "enum": ["ally", "neutral", "enemy"] },
+        "description": { "type": "string" }
+      }
+    },
+    "Skill": {
+      "title": "Skill",
+      "description": "A character skill.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "category": { "type": "string", "enum": ["Common", "Extra", "Unique", "Ultimate", "Ancient", "Legendary"] },
+        "description": { "type": "string" }
+      }
+    },
+    "Weapon": {
+      "title": "Weapon",
+      "description": "A weapon or gear.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "rarity": { "type": "string", "enum": ["Common", "Rare", "Super Rare", "Legendary", "Mythical"] },
         "description": { "type": "string" }
       }
     },

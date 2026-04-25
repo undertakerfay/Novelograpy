@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { Plus, Book, Trash2, ChevronLeft, Search, Wand2, User, ListTodo, FileText, RotateCcw, XCircle, Pin, PinOff, Sword, Zap, ExternalLink, Bookmark, Venus, Mars, HelpCircle, Eye, X, List, Sparkles, MessageSquare, Anchor, BookOpen, Send, GripVertical, Globe, MapPin, Ghost, ShieldAlert } from 'lucide-react';
+import { Plus, Book, Trash2, ChevronLeft, Search, Wand2, User, ListTodo, FileText, RotateCcw, XCircle, Pin, PinOff, Sword, Zap, ExternalLink, Bookmark, Venus, Mars, HelpCircle, Eye, X, List, Sparkles, MessageSquare, Anchor, BookOpen, Send, GripVertical, Globe, MapPin, Ghost, ShieldAlert, Cloud, Check, Star } from 'lucide-react';
 import Markdown from 'react-markdown';
 import { motion, AnimatePresence, Reorder } from 'motion/react';
 import { Story, AppView, Character, PlotPoint, Chapter, Creature, Location, Faction, Skill, Weapon } from './types';
@@ -7,7 +7,7 @@ import { cn } from './lib/utils';
 import { GoogleGenAI } from "@google/genai";
 import { auth, db, handleFirestoreError, OperationType } from './firebase';
 import { onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, User as FirebaseUser } from 'firebase/auth';
-import { collection, onSnapshot, query, where, addDoc, updateDoc, deleteDoc, doc, getDocFromServer, serverTimestamp, setDoc } from 'firebase/firestore';
+import { collection, onSnapshot, query, where, addDoc, updateDoc, deleteDoc, doc, getDocFromServer, serverTimestamp, setDoc, getDoc } from 'firebase/firestore';
 
 // Utility for word count
 const getWordCount = (text: string) => {
@@ -15,11 +15,89 @@ const getWordCount = (text: string) => {
   return text.trim().split(/\s+/).filter(Boolean).length;
 };
 
-// Utility for page count (assuming 300 words per page)
-const getPageCount = (text: string) => {
-  const words = getWordCount(text);
-  return Math.max(1, Math.ceil(words / 300));
-};
+// Reusable Debounced Input
+function DebouncedInput({ 
+  value, 
+  onChange, 
+  placeholder, 
+  className, 
+  readOnly,
+  type = "text"
+}: { 
+  value: string; 
+  onChange: (val: string) => void; 
+  placeholder?: string; 
+  className?: string; 
+  readOnly?: boolean;
+  type?: string;
+}) {
+  const [localValue, setLocalValue] = useState(value);
+
+  useEffect(() => {
+    setLocalValue(value);
+  }, [value]);
+
+  useEffect(() => {
+    if (localValue === value) return;
+    const timeoutId = setTimeout(() => {
+      onChange(localValue);
+    }, 1000);
+    return () => clearTimeout(timeoutId);
+  }, [localValue, onChange, value]);
+
+  return (
+    <input
+      type={type}
+      value={localValue}
+      onChange={(e) => setLocalValue(e.target.value)}
+      placeholder={placeholder}
+      className={className}
+      readOnly={readOnly}
+    />
+  );
+}
+
+// Reusable Debounced Textarea
+function DebouncedTextarea({ 
+  value, 
+  onChange, 
+  placeholder, 
+  className, 
+  readOnly,
+  rows
+}: { 
+  value: string; 
+  onChange: (val: string) => void; 
+  placeholder?: string; 
+  className?: string; 
+  readOnly?: boolean;
+  rows?: number;
+}) {
+  const [localValue, setLocalValue] = useState(value);
+
+  useEffect(() => {
+    setLocalValue(value);
+  }, [value]);
+
+  useEffect(() => {
+    if (localValue === value) return;
+    const timeoutId = setTimeout(() => {
+      onChange(localValue);
+    }, 1000);
+    return () => clearTimeout(timeoutId);
+  }, [localValue, onChange, value]);
+
+  return (
+    <textarea
+      value={localValue}
+      onChange={(e) => setLocalValue(e.target.value)}
+      placeholder={placeholder}
+      className={className}
+      readOnly={readOnly}
+      rows={rows}
+    />
+  );
+}
 
 // Genre Constants
 const GENRES = [
@@ -28,6 +106,51 @@ const GENRES = [
   'Mystery', 'Thriller', 'Horror', 'Romance', 'Historical', 
   'Adventure', 'Action', 'Cultivation', 'LitRPG', 'Isekai'
 ];
+
+// Hook for Reader Progression
+const useReaderProgression = (storyId: string, chapters: Chapter[], isWriter: boolean) => {
+  const [unlockedIds, setUnlockedIds] = useState<string[]>([]);
+
+  useEffect(() => {
+    if (isWriter || !storyId) return;
+    const key = `unlocked_chapters_${storyId}`;
+    const saved = localStorage.getItem(key);
+    if (saved) {
+      try {
+        setUnlockedIds(JSON.parse(saved));
+      } catch (e) {
+        setUnlockedIds([chapters[0]?.id].filter(Boolean));
+      }
+    } else if (chapters.length > 0) {
+      const firstId = chapters[0].id;
+      setUnlockedIds([firstId]);
+      localStorage.setItem(key, JSON.stringify([firstId]));
+    }
+  }, [storyId, chapters.length, isWriter]);
+
+  const unlockNext = (currentId: string) => {
+    if (isWriter) return null;
+    const activeChapters = chapters.filter(c => !c.isDeleted);
+    const currentIndex = activeChapters.findIndex(c => c.id === currentId);
+    if (currentIndex !== -1 && currentIndex < activeChapters.length - 1) {
+      const nextId = activeChapters[currentIndex + 1].id;
+      if (!unlockedIds.includes(nextId)) {
+        const newList = [...unlockedIds, nextId];
+        setUnlockedIds(newList);
+        localStorage.setItem(`unlocked_chapters_${storyId}`, JSON.stringify(newList));
+        return nextId;
+      }
+    }
+    return null;
+  };
+
+  const isUnlocked = (chapterId: string) => {
+    if (isWriter) return true;
+    return unlockedIds.includes(chapterId);
+  };
+
+  return { unlockedIds, unlockNext, isUnlocked };
+};
 
 // Initial empty novel template
 const createNewStory = (ownerId: string): Partial<Story> => ({
@@ -123,7 +246,8 @@ function AppContent() {
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [user, setUser] = useState<FirebaseUser | null>(null);
   const [isAuthReady, setIsAuthReady] = useState(false);
-  const [notification, setNotification] = useState<{ message: string; type: 'welcome' | 'goodbye' } | null>(null);
+  const [notification, setNotification] = useState<{ message: string; type: 'welcome' | 'goodbye' | 'error' } | null>(null);
+  const [connectionStatus, setConnectionStatus] = useState<'connecting' | 'online' | 'offline' | 'error'>('connecting');
 
   const welcomeMessages = [
     "Welcome back, Master Fay. The worlds await your command.",
@@ -162,18 +286,28 @@ function AppContent() {
   }, []);
 
   // Firestore connection test
+  const testConnection = async (isRetry = false) => {
+    if (isRetry) setConnectionStatus('connecting');
+    try {
+      await getDocFromServer(doc(db, 'test', 'connection'));
+      setConnectionStatus('online');
+    } catch (error: any) {
+      const isOfflineStatus = error?.code === 'unavailable' || 
+                              error?.message?.includes('the client is offline') || 
+                              error?.message?.includes('unavailable');
+      
+      if (isOfflineStatus) {
+        setConnectionStatus('offline');
+        console.warn("Firestore connection check: Offline mode.");
+      } else {
+        setConnectionStatus('error');
+        console.error("Firestore connection check: Unrecoverable error.", error);
+      }
+    }
+  };
+
   useEffect(() => {
     if (!isAuthReady) return;
-    
-    const testConnection = async () => {
-      try {
-        await getDocFromServer(doc(db, 'test', 'connection'));
-      } catch (error) {
-        if (error instanceof Error && (error.message.includes('the client is offline') || error.message.includes('unavailable'))) {
-          console.error("Firestore connection issue. The client might be offline or the service is unavailable.");
-        }
-      }
-    };
     testConnection();
   }, [isAuthReady]);
 
@@ -342,6 +476,38 @@ function AppContent() {
     }
   };
 
+  const incrementChapterCompletion = async (storyId: string, chapterId: string) => {
+    try {
+      const storyRef = doc(db, 'stories', storyId);
+      const storyDoc = await getDoc(storyRef);
+      if (storyDoc.exists()) {
+        const data = storyDoc.data() as Story;
+        const updatedChapters = data.chapters.map(c => 
+          c.id === chapterId ? { ...c, completions: (c.completions || 0) + 1 } : c
+        );
+        await updateDoc(storyRef, { chapters: updatedChapters });
+      }
+    } catch (error) {
+      console.error("Failed to increment completion", error);
+    }
+  };
+
+  const toggleChapterPublish = async (storyId: string, chapterId: string) => {
+    try {
+      const storyRef = doc(db, 'stories', storyId);
+      const storyDoc = await getDoc(storyRef);
+      if (storyDoc.exists()) {
+        const data = storyDoc.data() as Story;
+        const updatedChapters = data.chapters.map(c => 
+          c.id === chapterId ? { ...c, isPublished: !c.isPublished } : c
+        );
+        await updateDoc(storyRef, { chapters: updatedChapters });
+      }
+    } catch (error) {
+      console.error("Failed to toggle chapter publish status", error);
+    }
+  };
+
   const filteredStories = useMemo(() => {
     const filtered = stories.filter(s => {
       const matchesSearch = s.title.toLowerCase().includes(searchTerm.toLowerCase());
@@ -373,6 +539,25 @@ function AppContent() {
                 <p className="text-brand-600 text-sm md:text-base">Where {isLoggedIn ? "your" : "my"} worlds come to life.</p>
               </div>
               <div className="flex items-center justify-end gap-3 md:gap-4 w-full sm:w-auto">
+                <div className="flex items-center gap-2 mr-2">
+                  <div className={cn(
+                    "w-2 h-2 rounded-full",
+                    connectionStatus === 'online' ? "bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.5)]" :
+                    connectionStatus === 'connecting' ? "bg-amber-400 animate-pulse" :
+                    connectionStatus === 'offline' ? "bg-brand-300" : "bg-red-500"
+                  )} />
+                  <span className="text-[10px] font-bold text-brand-400 uppercase tracking-tighter">
+                    {connectionStatus}
+                  </span>
+                  {connectionStatus === 'offline' && (
+                    <button 
+                      onClick={() => testConnection(true)}
+                      className="text-[10px] bg-brand-100 px-2 py-0.5 rounded-full hover:bg-brand-200 transition-colors"
+                    >
+                      Retry
+                    </button>
+                  )}
+                </div>
                 {isLoggedIn && (
                   <div className="flex bg-brand-100 p-1 rounded-2xl mr-2">
                     <button
@@ -580,12 +765,17 @@ function AppContent() {
                           {story.chapters.filter(c => !c.isDeleted).length} Chapters • {Math.max(1, Math.ceil(story.chapters.filter(c => !c.isDeleted).reduce((acc, c) => acc + getWordCount(c.content), 0) / 300))} Pages
                         </p>
                         <div className="flex items-center gap-4 text-xs text-brand-400 font-medium">
-                          <span className="flex items-center gap-1">
+                          <span className="flex items-center gap-1" title="Characters">
                             <User size={12} /> {story.characters.length}
                           </span>
-                          <span className="flex items-center gap-1">
+                          <span className="flex items-center gap-1" title="Chapters">
                             <FileText size={12} /> {story.chapters.filter(c => !c.isDeleted).length}
                           </span>
+                          {isLoggedIn && story.chapters.some(c => c.completions) && (
+                            <span className="flex items-center gap-1 text-green-600 font-bold" title="Total Readers">
+                              <Zap size={12} fill="currentColor" /> {story.chapters.filter(c => !c.isDeleted).reduce((acc, c) => acc + (c.completions || 0), 0)}
+                            </span>
+                          )}
                           <span className="ml-auto">
                             {new Date(story.lastModified).toLocaleDateString()}
                           </span>
@@ -664,6 +854,8 @@ function AppContent() {
             onBack={() => setView('dashboard')}
             onUpdate={updateStory}
             isLoggedIn={isLoggedIn}
+            onIncrementCompletion={incrementChapterCompletion}
+            onToggleChapterPublish={toggleChapterPublish}
           />
         )}
       </AnimatePresence>
@@ -795,11 +987,46 @@ function LoginView({ onLogin, onBack }: { onLogin: () => void; onBack: () => voi
   );
 }
 
-function EditorView({ story, onBack, onUpdate, isLoggedIn }: { 
+// Star Rating Component
+// Finish Chapter Button
+function FinishChapterButton({ onFinish, isFinished }: { onFinish: () => void; isFinished: boolean }) {
+  if (isFinished) {
+    return (
+      <div className="flex items-center gap-2 text-green-500 font-bold bg-green-50 px-6 py-4 rounded-3xl border-2 border-green-100 mt-12 animate-in fade-in slide-in-from-bottom-4">
+        <Check size={20} />
+        <span>Chapter Read & Unlocked</span>
+      </div>
+    );
+  }
+
+  return (
+    <motion.button
+      whileHover={{ scale: 1.02 }}
+      whileTap={{ scale: 0.98 }}
+      onClick={onFinish}
+      className="flex items-center gap-3 bg-brand-800 text-brand-50 px-8 py-4 rounded-3xl font-bold shadow-xl hover:bg-brand-700 transition-all mt-12 group overflow-hidden relative"
+    >
+      <div className="relative z-10 flex items-center gap-3">
+        <Zap size={20} className="group-hover:animate-pulse" />
+        <span>Finish Chapter & Unlock Next</span>
+      </div>
+      <motion.div 
+        className="absolute inset-0 bg-brand-600/50"
+        initial={{ x: '-100%' }}
+        whileHover={{ x: '100%' }}
+        transition={{ duration: 0.6, repeat: Infinity }}
+      />
+    </motion.button>
+  );
+}
+
+function EditorView({ story, onBack, onUpdate, isLoggedIn, onIncrementCompletion, onToggleChapterPublish }: { 
   story: Story; 
   onBack: () => void; 
   onUpdate: (updates: Partial<Story>) => void;
   isLoggedIn: boolean;
+  onIncrementCompletion: (storyId: string, chapterId: string) => Promise<void>;
+  onToggleChapterPublish: (storyId: string, chapterId: string) => Promise<void>;
 }) {
   const [activeTab, setActiveTab] = useState<'write' | 'characters' | 'plot' | 'world'>('write');
   const [showGenreSelector, setShowGenreSelector] = useState(false);
@@ -807,10 +1034,15 @@ function EditorView({ story, onBack, onUpdate, isLoggedIn }: {
   const [showAiHelper, setShowAiHelper] = useState(false);
   const [showSidebar, setShowSidebar] = useState(false);
 
+  // For readers, only show published chapters
   const activeChapters = useMemo(() => 
-    story.chapters.filter(c => !c.isDeleted).sort((a, b) => a.order - b.order),
-    [story.chapters]
+    story.chapters
+      .filter(c => !c.isDeleted && (isLoggedIn || c.isPublished))
+      .sort((a, b) => a.order - b.order),
+    [story.chapters, isLoggedIn]
   );
+
+  const { isUnlocked, unlockNext } = useReaderProgression(story.id, activeChapters, isLoggedIn);
 
   const handleReorderChapters = (reorderedActive: Chapter[]) => {
     if (!isLoggedIn) return;
@@ -832,10 +1064,27 @@ function EditorView({ story, onBack, onUpdate, isLoggedIn }: {
 
   const currentChapter = story.chapters.find(c => c.id === currentChapterId && !c.isDeleted) || activeChapters[0];
   const [localContent, setLocalContent] = useState(currentChapter?.content || '');
+  const [isSaving, setIsSaving] = useState(false);
 
   useEffect(() => {
     setLocalContent(currentChapter?.content || '');
   }, [currentChapter?.id]);
+
+  // Debounced update for Firestore
+  useEffect(() => {
+    if (!isLoggedIn || !currentChapter) return;
+    
+    // Don't save if content hasn't changed from the story's version
+    if (localContent === currentChapter.content) return;
+
+    setIsSaving(true);
+    const timeoutId = setTimeout(() => {
+      updateChapter(currentChapter.id, { content: localContent });
+      setIsSaving(false);
+    }, 2000); // 2 second debounce
+
+    return () => clearTimeout(timeoutId);
+  }, [localContent, currentChapter?.id, isLoggedIn]);
 
   const updateChapter = (chapterId: string, updates: Partial<Chapter>) => {
     onUpdate({
@@ -846,7 +1095,7 @@ function EditorView({ story, onBack, onUpdate, isLoggedIn }: {
   const handleContentChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     const newContent = e.target.value;
     setLocalContent(newContent);
-    updateChapter(currentChapter.id, { content: newContent });
+    // Removed immediate updateChapter call to rely on debounced useEffect
   };
 
   const addChapter = () => {
@@ -911,10 +1160,10 @@ function EditorView({ story, onBack, onUpdate, isLoggedIn }: {
               Dashboard
             </button>
             <div className="flex flex-col">
-              <input
+              <DebouncedInput
                 type="text"
                 value={story.title}
-                onChange={(e) => onUpdate({ title: e.target.value })}
+                onChange={(val) => onUpdate({ title: val })}
                 readOnly={!isLoggedIn}
                 className={cn(
                   "text-lg md:text-xl font-bold bg-transparent border-none focus:outline-none text-brand-900 placeholder:text-brand-200 truncate",
@@ -922,10 +1171,10 @@ function EditorView({ story, onBack, onUpdate, isLoggedIn }: {
                 )}
                 placeholder="Novel Title"
               />
-              <input
+              <DebouncedInput
                 type="text"
                 value={story.subtitle || ''}
-                onChange={(e) => onUpdate({ subtitle: e.target.value })}
+                onChange={(val) => onUpdate({ subtitle: val })}
                 readOnly={!isLoggedIn}
                 className={cn(
                   "text-xs md:text-sm italic bg-transparent border-none focus:outline-none text-brand-400 placeholder:text-brand-200 truncate",
@@ -1130,43 +1379,75 @@ function EditorView({ story, onBack, onUpdate, isLoggedIn }: {
                 onReorder={handleReorderChapters}
                 className="flex-1 p-2 space-y-1 overflow-y-auto"
               >
-                {activeChapters.map((chapter) => (
-                  <Reorder.Item
-                    key={chapter.id}
-                    value={chapter}
-                    onClick={() => {
-                      setCurrentChapterId(chapter.id);
-                      if (window.innerWidth < 1024) setShowSidebar(false);
-                    }}
-                    className={cn(
-                      "group flex items-center gap-2 p-3 rounded-xl cursor-pointer transition-all",
-                      currentChapterId === chapter.id 
-                        ? "bg-brand-100 text-brand-900 font-medium" 
-                        : "hover:bg-brand-50 text-brand-600"
-                    )}
-                  >
-                    {isLoggedIn && (
-                      <div className="cursor-grab active:cursor-grabbing text-brand-300 group-hover:text-brand-400">
-                        <GripVertical size={16} />
-                      </div>
-                    )}
-                    <div className="flex flex-col truncate flex-1">
-                      <span className="truncate">{chapter.title}</span>
-                      <span className="text-[10px] text-brand-400 font-normal">
-                        {getWordCount(chapter.content)} words
-                      </span>
-                    </div>
-                    <button 
-                      onClick={(e) => deleteChapter(chapter.id, e)}
+                {activeChapters.map((chapter) => {
+                  const locked = !isUnlocked(chapter.id);
+                  return (
+                    <Reorder.Item
+                      key={chapter.id}
+                      value={chapter}
+                      dragListener={isLoggedIn}
+                      onClick={() => {
+                        if (locked) return;
+                        setCurrentChapterId(chapter.id);
+                        if (window.innerWidth < 1024) setShowSidebar(false);
+                      }}
                       className={cn(
-                        "opacity-0 group-hover:opacity-100 p-1 hover:text-red-500 transition-opacity",
-                        !isLoggedIn && "hidden"
+                        "group flex items-center gap-2 p-3 rounded-xl transition-all",
+                        locked ? "opacity-50 cursor-not-allowed grayscale" : "cursor-pointer",
+                        currentChapterId === chapter.id 
+                          ? "bg-brand-100 text-brand-900 font-medium" 
+                          : locked ? "text-brand-300" : "hover:bg-brand-50 text-brand-600"
                       )}
                     >
-                      <Trash2 size={14} />
-                    </button>
-                  </Reorder.Item>
-                ))}
+                      {isLoggedIn ? (
+                        <div className="cursor-grab active:cursor-grabbing text-brand-300 group-hover:text-brand-400">
+                          <GripVertical size={16} />
+                        </div>
+                      ) : (
+                        locked ? <Pin size={14} className="text-brand-400" /> : <BookOpen size={14} className="text-brand-500" />
+                      )}
+                      <div className="flex flex-col truncate flex-1">
+                        <div className="flex items-center gap-2 truncate">
+                          <span className="truncate">{chapter.title}</span>
+                          {isLoggedIn && (
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                onToggleChapterPublish(story.id, chapter.id);
+                              }}
+                              className={cn(
+                                "flex items-center gap-1 text-[8px] font-bold px-1.5 py-0.5 rounded-full transition-colors",
+                                chapter.isPublished 
+                                  ? "bg-green-100 text-green-700 hover:bg-green-200" 
+                                  : "bg-brand-100 text-brand-400 hover:bg-brand-200"
+                              )}
+                              title={chapter.isPublished ? "Published" : "Click to Publish"}
+                            >
+                              {chapter.isPublished ? <Eye size={8} /> : <Book size={8} />}
+                              {chapter.isPublished ? "Live" : "Draft"}
+                            </button>
+                          )}
+                          {isLoggedIn && (chapter.completions || 0) > 0 && (
+                            <span className="flex items-center gap-0.5 bg-brand-200 text-brand-700 text-[8px] font-bold px-1.5 py-0.5 rounded-full">
+                              <User size={8} /> {chapter.completions}
+                            </span>
+                          )}
+                        </div>
+                        <span className="text-[10px] text-brand-400 font-normal">
+                          {getWordCount(chapter.content)} words
+                        </span>
+                      </div>
+                      {isLoggedIn && (
+                        <button 
+                          onClick={(e) => deleteChapter(chapter.id, e)}
+                          className="opacity-0 group-hover:opacity-100 p-1 hover:text-red-500 transition-opacity"
+                        >
+                          <Trash2 size={14} />
+                        </button>
+                      )}
+                    </Reorder.Item>
+                  );
+                })}
               </Reorder.Group>
             </aside>
           </>
@@ -1212,9 +1493,47 @@ function EditorView({ story, onBack, onUpdate, isLoggedIn }: {
                   placeholder={isLoggedIn ? "Start writing your chapter..." : "No content yet."}
                   autoFocus={isLoggedIn}
                 />
-                <div className="flex justify-end text-xs text-brand-400 font-medium pt-4 border-t border-brand-100">
-                  {getWordCount(currentChapter.content)} words in this chapter
+                <div className="flex justify-between items-center text-xs text-brand-400 font-medium pt-4 border-t border-brand-100">
+                  <div className="flex items-center gap-2">
+                    {getWordCount(localContent)} words in this chapter
+                    {isSaving && (
+                      <span className="flex items-center gap-1 text-brand-300 italic animate-pulse">
+                        <Cloud size={12} /> Saving...
+                      </span>
+                    )}
+                    {!isSaving && localContent !== currentChapter.content && (
+                      <span className="flex items-center gap-1 text-brand-300 italic">
+                        <Check size={12} /> Changes pending...
+                      </span>
+                    )}
+                    {!isSaving && localContent === currentChapter.content && (
+                      <span className="flex items-center gap-1 text-green-400 italic">
+                        <Check size={12} /> Saved to cloud
+                      </span>
+                    )}
+                  </div>
                 </div>
+
+                {!isLoggedIn && (
+                  <div className="flex flex-col items-center">
+                    <FinishChapterButton 
+                      isFinished={isUnlocked(activeChapters[activeChapters.findIndex(c => c.id === currentChapter.id) + 1]?.id || '')}
+                      onFinish={async () => {
+                        const nextId = unlockNext(currentChapter.id);
+                        await onIncrementCompletion(story.id, currentChapter.id);
+                        if (nextId) setCurrentChapterId(nextId);
+                      }}
+                    />
+                    
+                    {activeChapters.findIndex(c => c.id === currentChapter.id) === activeChapters.length - 1 && (
+                      <div className="text-center mt-12 p-8 border-t border-brand-100 w-full mb-8">
+                        <Sparkles size={32} className="mx-auto text-amber-500 mb-4" />
+                        <h4 className="text-xl font-bold font-serif text-brand-900">You've reached the end of the current chapters!</h4>
+                        <p className="text-brand-500 mt-2 text-sm">Return soon as the Master inks more worlds.</p>
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             )}
 
@@ -1414,10 +1733,10 @@ function CharacterManager({ storyTitle, characters, onUpdate, isLoggedIn }: { st
                   <div className="flex flex-col sm:flex-row gap-4 items-start sm:items-center">
                     <div className="flex-1 flex flex-col gap-3 w-full">
                       <div className="flex flex-col sm:flex-row gap-3 sm:items-center">
-                        <input
+                        <DebouncedInput
                           placeholder="Name"
                           value={char.name}
-                          onChange={(e) => updateChar(char.id, { name: e.target.value })}
+                          onChange={(val) => updateChar(char.id, { name: val })}
                           readOnly={!isLoggedIn}
                           className={cn(
                             "flex-1 text-lg md:text-xl font-bold border-b-2 border-transparent focus:border-brand-200 focus:outline-none",
@@ -1425,10 +1744,10 @@ function CharacterManager({ storyTitle, characters, onUpdate, isLoggedIn }: { st
                           )}
                         />
                         <div className="flex items-center gap-2">
-                          <input
+                          <DebouncedInput
                             placeholder="Role (e.g. Protagonist)"
                             value={char.role}
-                            onChange={(e) => updateChar(char.id, { role: e.target.value })}
+                            onChange={(val) => updateChar(char.id, { role: val })}
                             readOnly={!isLoggedIn}
                             className={cn(
                               "flex-1 text-sm md:text-base text-brand-500 border-b-2 border-transparent focus:border-brand-200 focus:outline-none",
@@ -1464,10 +1783,10 @@ function CharacterManager({ storyTitle, characters, onUpdate, isLoggedIn }: { st
                       </div>
                     </div>
                   </div>
-                <textarea
+                <DebouncedTextarea
                   placeholder={isLoggedIn ? "Description, backstory, motivations..." : "No description provided."}
                   value={char.description}
-                  onChange={(e) => updateChar(char.id, { description: e.target.value })}
+                  onChange={(val) => updateChar(char.id, { description: val })}
                   readOnly={!isLoggedIn}
                   className={cn(
                     "w-full h-24 bg-brand-50 rounded-2xl p-4 focus:outline-none focus:ring-2 ring-brand-200 resize-none text-sm md:text-base",
@@ -1493,12 +1812,12 @@ function CharacterManager({ storyTitle, characters, onUpdate, isLoggedIn }: { st
                   <div className="flex flex-wrap gap-2">
                     {(char.traits || []).map((trait, tIndex) => (
                       <div key={tIndex} className="flex items-center gap-1 bg-brand-50 border border-brand-100 rounded-full px-3 py-1 group/trait">
-                        <input
+                        <DebouncedInput
                           type="text"
                           value={trait}
-                          onChange={(e) => {
+                          onChange={(val) => {
                             const newTraits = [...char.traits];
-                            newTraits[tIndex] = e.target.value;
+                            newTraits[tIndex] = val;
                             updateChar(char.id, { traits: newTraits });
                           }}
                           readOnly={!isLoggedIn}
@@ -1601,10 +1920,10 @@ function PlotManager({ storyTitle, plotPoints, onUpdate, isLoggedIn }: { storyTi
         {sortedPlotPoints.map(point => (
           <div key={point.id} className="flex gap-3 md:gap-4 items-start bg-white p-4 md:p-6 rounded-3xl border-2 border-brand-100 shadow-sm transition-all">
             <div className="flex-1 space-y-2 min-w-0">
-              <input
+              <DebouncedInput
                 placeholder="Plot Event Title"
                 value={point.title}
-                onChange={(e) => updatePoint(point.id, { title: e.target.value })}
+                onChange={(val) => updatePoint(point.id, { title: val })}
                 readOnly={!isLoggedIn}
                 className={cn(
                   "w-full font-bold focus:outline-none text-sm md:text-base",
@@ -1612,10 +1931,10 @@ function PlotManager({ storyTitle, plotPoints, onUpdate, isLoggedIn }: { storyTi
                   !isLoggedIn && "cursor-default"
                 )}
               />
-              <textarea
+              <DebouncedTextarea
                 placeholder={isLoggedIn ? "Details about this event..." : "No details provided."}
                 value={point.description}
-                onChange={(e) => updatePoint(point.id, { description: e.target.value })}
+                onChange={(val) => updatePoint(point.id, { description: val })}
                 readOnly={!isLoggedIn}
                 className={cn(
                   "w-full bg-transparent focus:outline-none text-xs md:text-sm text-brand-600 resize-none",
@@ -1827,30 +2146,30 @@ function WorldManager({
                 </button>
               )}
               <div className="space-y-4">
-                <input
+                <DebouncedInput
                   placeholder="Creature Name"
                   value={creature.name}
-                  onChange={(e) => updateCreature(creature.id, { name: e.target.value })}
+                  onChange={(val) => updateCreature(creature.id, { name: val })}
                   readOnly={!isLoggedIn}
                   className="w-full text-xl font-bold bg-transparent focus:outline-none placeholder:text-brand-200"
                 />
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-1.5">
                     <label className="text-[10px] font-bold text-brand-400 uppercase tracking-wider">Species</label>
-                    <input
+                    <DebouncedInput
                       placeholder="e.g. Dragon"
                       value={creature.species}
-                      onChange={(e) => updateCreature(creature.id, { species: e.target.value })}
+                      onChange={(val) => updateCreature(creature.id, { species: val })}
                       readOnly={!isLoggedIn}
                       className="w-full text-xs bg-brand-50 rounded-xl p-3 focus:outline-none focus:ring-2 ring-brand-200"
                     />
                   </div>
                   <div className="space-y-1.5">
                     <label className="text-[10px] font-bold text-brand-400 uppercase tracking-wider">Habitat</label>
-                    <input
+                    <DebouncedInput
                       placeholder="e.g. Volcanic Peaks"
                       value={creature.habitat}
-                      onChange={(e) => updateCreature(creature.id, { habitat: e.target.value })}
+                      onChange={(val) => updateCreature(creature.id, { habitat: val })}
                       readOnly={!isLoggedIn}
                       className="w-full text-xs bg-brand-50 rounded-xl p-3 focus:outline-none focus:ring-2 ring-brand-200"
                     />
@@ -1881,20 +2200,20 @@ function WorldManager({
                 </div>
                 <div className="space-y-1.5">
                   <label className="text-[10px] font-bold text-brand-400 uppercase tracking-wider">Abilities</label>
-                  <textarea
+                  <DebouncedTextarea
                     placeholder="Magical powers, physical traits..."
                     value={creature.abilities}
-                    onChange={(e) => updateCreature(creature.id, { abilities: e.target.value })}
+                    onChange={(val) => updateCreature(creature.id, { abilities: val })}
                     readOnly={!isLoggedIn}
                     className="w-full text-xs bg-brand-50 rounded-xl p-3 focus:outline-none focus:ring-2 ring-brand-200 resize-none h-20"
                   />
                 </div>
                 <div className="space-y-1.5">
                   <label className="text-[10px] font-bold text-brand-400 uppercase tracking-wider">Description/Lore</label>
-                  <textarea
+                  <DebouncedTextarea
                     placeholder="History, behavior, weaknesses..."
                     value={creature.description}
-                    onChange={(e) => updateCreature(creature.id, { description: e.target.value })}
+                    onChange={(val) => updateCreature(creature.id, { description: val })}
                     readOnly={!isLoggedIn}
                     className="w-full text-xs bg-brand-50 rounded-xl p-3 focus:outline-none focus:ring-2 ring-brand-200 resize-none h-28"
                   />
@@ -1938,30 +2257,30 @@ function WorldManager({
                 </button>
               )}
               <div className="space-y-4">
-                <input
+                <DebouncedInput
                   placeholder="Location Name"
                   value={location.name}
-                  onChange={(e) => updateLocation(location.id, { name: e.target.value })}
+                  onChange={(val) => updateLocation(location.id, { name: val })}
                   readOnly={!isLoggedIn}
                   className="w-full text-xl font-bold bg-transparent focus:outline-none placeholder:text-brand-200"
                 />
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-1.5">
                     <label className="text-[10px] font-bold text-brand-400 uppercase tracking-wider">Climate</label>
-                    <input
+                    <DebouncedInput
                       placeholder="e.g. Tropical"
                       value={location.climate}
-                      onChange={(e) => updateLocation(location.id, { climate: e.target.value })}
+                      onChange={(val) => updateLocation(location.id, { climate: val })}
                       readOnly={!isLoggedIn}
                       className="w-full text-xs bg-brand-50 rounded-xl p-3 focus:outline-none focus:ring-2 ring-brand-200"
                     />
                   </div>
                   <div className="space-y-1.5">
                     <label className="text-[10px] font-bold text-brand-400 uppercase tracking-wider">Ruling Power</label>
-                    <input
+                    <DebouncedInput
                       placeholder="e.g. The Sun Empire"
                       value={location.rulingPower}
-                      onChange={(e) => updateLocation(location.id, { rulingPower: e.target.value })}
+                      onChange={(val) => updateLocation(location.id, { rulingPower: val })}
                       readOnly={!isLoggedIn}
                       className="w-full text-xs bg-brand-50 rounded-xl p-3 focus:outline-none focus:ring-2 ring-brand-200"
                     />
@@ -1969,20 +2288,20 @@ function WorldManager({
                 </div>
                 <div className="space-y-1.5">
                   <label className="text-[10px] font-bold text-brand-400 uppercase tracking-wider">Lore/History</label>
-                  <textarea
+                  <DebouncedTextarea
                     placeholder="Ancient legends, historical events..."
                     value={location.lore}
-                    onChange={(e) => updateLocation(location.id, { lore: e.target.value })}
+                    onChange={(val) => updateLocation(location.id, { lore: val })}
                     readOnly={!isLoggedIn}
                     className="w-full text-xs bg-brand-50 rounded-xl p-3 focus:outline-none focus:ring-2 ring-brand-200 resize-none h-24"
                   />
                 </div>
                 <div className="space-y-1.5">
                   <label className="text-[10px] font-bold text-brand-400 uppercase tracking-wider">Description</label>
-                  <textarea
+                  <DebouncedTextarea
                     placeholder="Geography, atmosphere, landmarks..."
                     value={location.description}
-                    onChange={(e) => updateLocation(location.id, { description: e.target.value })}
+                    onChange={(val) => updateLocation(location.id, { description: val })}
                     readOnly={!isLoggedIn}
                     className="w-full text-xs bg-brand-50 rounded-xl p-3 focus:outline-none focus:ring-2 ring-brand-200 resize-none h-28"
                   />
@@ -2026,30 +2345,30 @@ function WorldManager({
                 </button>
               )}
               <div className="space-y-4">
-                <input
+                <DebouncedInput
                   placeholder="Faction Name"
                   value={faction.name}
-                  onChange={(e) => updateFaction(faction.id, { name: e.target.value })}
+                  onChange={(val) => updateFaction(faction.id, { name: val })}
                   readOnly={!isLoggedIn}
                   className="w-full text-xl font-bold bg-transparent focus:outline-none placeholder:text-brand-200"
                 />
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-1.5">
                     <label className="text-[10px] font-bold text-brand-400 uppercase tracking-wider">Leader</label>
-                    <input
+                    <DebouncedInput
                       placeholder="e.g. Emperor Sol"
                       value={faction.leader}
-                      onChange={(e) => updateFaction(faction.id, { leader: e.target.value })}
+                      onChange={(val) => updateFaction(faction.id, { leader: val })}
                       readOnly={!isLoggedIn}
                       className="w-full text-xs bg-brand-50 rounded-xl p-3 focus:outline-none focus:ring-2 ring-brand-200"
                     />
                   </div>
                   <div className="space-y-1.5">
                     <label className="text-[10px] font-bold text-brand-400 uppercase tracking-wider">Influence</label>
-                    <input
+                    <DebouncedInput
                       placeholder="e.g. Continental"
                       value={faction.influence}
-                      onChange={(e) => updateFaction(faction.id, { influence: e.target.value })}
+                      onChange={(val) => updateFaction(faction.id, { influence: val })}
                       readOnly={!isLoggedIn}
                       className="w-full text-xs bg-brand-50 rounded-xl p-3 focus:outline-none focus:ring-2 ring-brand-200"
                     />
@@ -2079,10 +2398,10 @@ function WorldManager({
                 </div>
                 <div className="space-y-1.5">
                   <label className="text-[10px] font-bold text-brand-400 uppercase tracking-wider">Description & Goals</label>
-                  <textarea
+                  <DebouncedTextarea
                     placeholder="Their agenda, history, and relationship with the protagonist..."
                     value={faction.description}
-                    onChange={(e) => updateFaction(faction.id, { description: e.target.value })}
+                    onChange={(val) => updateFaction(faction.id, { description: val })}
                     readOnly={!isLoggedIn}
                     className="w-full text-xs bg-brand-50 rounded-xl p-3 focus:outline-none focus:ring-2 ring-brand-200 resize-none h-28"
                   />
@@ -2126,10 +2445,10 @@ function WorldManager({
                 </button>
               )}
               <div className="space-y-4">
-                <input
+                <DebouncedInput
                   placeholder="Skill Name"
                   value={skill.name}
-                  onChange={(e) => updateSkill(skill.id, { name: e.target.value })}
+                  onChange={(val) => updateSkill(skill.id, { name: val })}
                   readOnly={!isLoggedIn}
                   className="w-full text-xl font-bold bg-transparent focus:outline-none placeholder:text-brand-200"
                 />
@@ -2155,10 +2474,10 @@ function WorldManager({
                 </div>
                 <div className="space-y-1.5">
                   <label className="text-[10px] font-bold text-brand-400 uppercase tracking-wider">Description & Effects</label>
-                  <textarea
+                  <DebouncedTextarea
                     placeholder="What does this skill do? How is it activated?"
                     value={skill.description}
-                    onChange={(e) => updateSkill(skill.id, { description: e.target.value })}
+                    onChange={(val) => updateSkill(skill.id, { description: val })}
                     readOnly={!isLoggedIn}
                     className="w-full text-xs bg-brand-50 rounded-xl p-3 focus:outline-none focus:ring-2 ring-brand-200 resize-none h-28"
                   />
@@ -2202,10 +2521,10 @@ function WorldManager({
                 </button>
               )}
               <div className="space-y-4">
-                <input
+                <DebouncedInput
                   placeholder="Weapon Name"
                   value={weapon.name}
-                  onChange={(e) => updateWeapon(weapon.id, { name: e.target.value })}
+                  onChange={(val) => updateWeapon(weapon.id, { name: val })}
                   readOnly={!isLoggedIn}
                   className="w-full text-xl font-bold bg-transparent focus:outline-none placeholder:text-brand-200"
                 />
@@ -2231,10 +2550,10 @@ function WorldManager({
                 </div>
                 <div className="space-y-1.5">
                   <label className="text-[10px] font-bold text-brand-400 uppercase tracking-wider">Description & History</label>
-                  <textarea
+                  <DebouncedTextarea
                     placeholder="Who forged it? What are its unique properties?"
                     value={weapon.description}
-                    onChange={(e) => updateWeapon(weapon.id, { description: e.target.value })}
+                    onChange={(val) => updateWeapon(weapon.id, { description: val })}
                     readOnly={!isLoggedIn}
                     className="w-full text-xs bg-brand-50 rounded-xl p-3 focus:outline-none focus:ring-2 ring-brand-200 resize-none h-28"
                   />
