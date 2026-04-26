@@ -1241,6 +1241,21 @@ function EditorView({ story, onBack, onUpdate, isLoggedIn, onIncrementCompletion
         </div>
         
         <div className="hidden lg:flex items-center gap-1 bg-brand-50 p-1 rounded-2xl mx-4">
+          {isLoggedIn && (
+            <button
+              onClick={() => {
+                if (confirm("Master Fay, do you truly wish to wipe the memories of all who have tread these paths? (Reset all chapter completion counts)")) {
+                  onUpdate({ 
+                    chapters: story.chapters.map(c => ({ ...c, completions: 0 })) 
+                  });
+                }
+              }}
+              className="p-2 text-brand-300 hover:text-amber-500 transition-colors mx-1"
+              title="Master Key: Reset All View Counts"
+            >
+              <ShieldAlert size={18} />
+            </button>
+          )}
           <TabButton 
             active={activeTab === 'write'} 
             onClick={() => setActiveTab('write')} 
@@ -1313,6 +1328,21 @@ function EditorView({ story, onBack, onUpdate, isLoggedIn, onIncrementCompletion
 
       {/* Mobile Tab Navigation */}
       <div className="lg:hidden bg-white border-b border-brand-100 px-4 py-2 flex items-center justify-around overflow-x-auto no-scrollbar">
+        {isLoggedIn && (
+          <button
+            onClick={() => {
+              if (confirm("Master Fay, do you truly wish to wipe the memories of all who have tread these paths? (Reset all chapter completion counts)")) {
+                onUpdate({ 
+                  chapters: story.chapters.map(c => ({ ...c, completions: 0 })) 
+                });
+              }
+            }}
+            className="p-2 text-brand-300 hover:text-amber-500 transition-colors mx-1 shrink-0"
+            title="Master Key: Reset All View Counts"
+          >
+            <ShieldAlert size={18} />
+          </button>
+        )}
         <TabButton 
           active={activeTab === 'write'} 
           onClick={() => setActiveTab('write')} 
@@ -1516,14 +1546,16 @@ function EditorView({ story, onBack, onUpdate, isLoggedIn, onIncrementCompletion
 
                 {!isLoggedIn && (
                   <div className="flex flex-col items-center">
-                    <FinishChapterButton 
-                      isFinished={isUnlocked(activeChapters[activeChapters.findIndex(c => c.id === currentChapter.id) + 1]?.id || '')}
-                      onFinish={async () => {
-                        const nextId = unlockNext(currentChapter.id);
-                        await onIncrementCompletion(story.id, currentChapter.id);
-                        if (nextId) setCurrentChapterId(nextId);
-                      }}
-                    />
+                    {activeChapters.findIndex(c => c.id === currentChapter.id) < activeChapters.length - 1 && (
+                      <FinishChapterButton 
+                        isFinished={isUnlocked(activeChapters[activeChapters.findIndex(c => c.id === currentChapter.id) + 1]?.id || '')}
+                        onFinish={async () => {
+                          const nextId = unlockNext(currentChapter.id);
+                          await onIncrementCompletion(story.id, currentChapter.id);
+                          if (nextId) setCurrentChapterId(nextId);
+                        }}
+                      />
+                    )}
                     
                     {activeChapters.findIndex(c => c.id === currentChapter.id) === activeChapters.length - 1 && (
                       <div className="text-center mt-12 p-8 border-t border-brand-100 w-full mb-8">
