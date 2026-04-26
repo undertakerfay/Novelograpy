@@ -2646,16 +2646,16 @@ function AiMuse({ story, currentChapter }: { story: Story; currentChapter?: Chap
 
     try {
       const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || '' });
-      const model = "gemini-3-flash-preview";
+      const modelName = "gemini-3-flash-preview";
       
       // Get previous chapters for context
       const currentChapterIndex = story.chapters.findIndex(c => c.id === currentChapter?.id);
       const previousChaptersContext = story.chapters
         .slice(0, currentChapterIndex)
-        .map(c => `Chapter: ${c.title}\nContent: ${c.content.slice(0, 1000)}...`)
+        .map(c => `Chapter: ${c.title}\nContent: ${c.content.slice(0, 500)}...`)
         .join('\n\n');
 
-      const context = `
+      const systemInstruction = `
         You are a helpful writing assistant for a novelist named Master Fay. 
         Current Novel: "${story.title}"
         Subtitle: "${story.subtitle || 'None'}"
@@ -2667,30 +2667,36 @@ function AiMuse({ story, currentChapter }: { story: Story; currentChapter?: Chap
         Locations: ${story.locations?.map(l => `${l.name} (${l.climate}): ${l.description}`).join(', ') || 'None'}
         Factions: ${story.factions?.map(f => `${f.name} (Leader: ${f.leader}, Influence: ${f.influence}): ${f.description}`).join(', ') || 'None'}
         
-        PREVIOUS CHAPTERS CONTEXT:
+        CONTEXT OF PREVIOUS CHAPTERS:
         ${previousChaptersContext || 'This is the first chapter.'}
         
-        CURRENT CHAPTER: "${currentChapter?.title}"
-        CURRENT CHAPTER PLOT POINTS: ${currentChapter?.plotPoints.map(p => p.title).join(', ')}
+        CURRENT CHAPTER TITLE: "${currentChapter?.title || 'Untitled'}"
+        CURRENT CHAPTER PLOT POINTS: ${currentChapter?.plotPoints.map(p => p.title).join(', ') || 'None'}
         CURRENT CHAPTER CONTENT: ${currentChapter?.content || 'Empty'}
         
-        The user might ask questions about their own novel, characters, or plot to help them remember or brainstorm.
-        Be friendly, encouraging, and specific to their story context. Use the previous chapters to ensure consistency in your suggestions.
+        The user might ask questions about their own novel, characters, or plot.
+        Be friendly, encouraging, and specific to their story context. Use the previous chapters to ensure consistency.
         Always address the user as "Master Fay" or "Master".
       `;
 
       const response = await ai.models.generateContent({
-        model,
+        model: modelName,
         contents: [
-          { role: 'user', parts: [{ text: context }] },
           { role: 'user', parts: [{ text: userMsg }] }
-        ]
+        ],
+        config: {
+          systemInstruction: systemInstruction.trim()
+        }
       });
 
-      setMessages(prev => [...prev, { role: 'ai', text: response.text || "I'm not sure, but keep writing!" }]);
+      if (response && response.text) {
+        setMessages(prev => [...prev, { role: 'ai', text: response.text }]);
+      } else {
+        throw new Error("Empty response from AI");
+      }
     } catch (error) {
-      console.error(error);
-      setMessages(prev => [...prev, { role: 'ai', text: "Sorry, my creative spark flickered. Try again?" }]);
+      console.error("AiMuse error:", error);
+      setMessages(prev => [...prev, { role: 'ai', text: "Forgive me, Master. My connection to the higher realms was momentarily severed. Perhaps try again? (" + (error instanceof Error ? error.message : "Internal Error") + ")" }]);
     } finally {
       setLoading(false);
     }
