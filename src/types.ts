@@ -88,6 +88,7 @@ export interface Story {
   isPinned?: boolean;
   isPublished?: boolean;
   ownerId: string;
+  lockVersion?: number;
 }
 
 export type AppView = 'dashboard' | 'editor';

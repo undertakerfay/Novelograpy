@@ -108,25 +108,39 @@ const GENRES = [
 ];
 
 // Hook for Reader Progression
-const useReaderProgression = (storyId: string, chapters: Chapter[], isWriter: boolean) => {
+const useReaderProgression = (storyId: string, chapters: Chapter[], isWriter: boolean, currentLockVersion: number = 0) => {
   const [unlockedIds, setUnlockedIds] = useState<string[]>([]);
 
   useEffect(() => {
     if (isWriter || !storyId) return;
-    const key = `unlocked_chapters_${storyId}`;
-    const saved = localStorage.getItem(key);
-    if (saved) {
+    const idKey = `unlocked_chapters_${storyId}`;
+    const versionKey = `lock_version_${storyId}`;
+    
+    const savedVersion = localStorage.getItem(versionKey);
+    const savedChapters = localStorage.getItem(idKey);
+
+    // If version mismatch, reset progress
+    if (savedVersion !== currentLockVersion.toString()) {
+      const firstId = chapters[0]?.id;
+      const initialList = firstId ? [firstId] : [];
+      setUnlockedIds(initialList);
+      localStorage.setItem(idKey, JSON.stringify(initialList));
+      localStorage.setItem(versionKey, currentLockVersion.toString());
+      return;
+    }
+
+    if (savedChapters) {
       try {
-        setUnlockedIds(JSON.parse(saved));
+        setUnlockedIds(JSON.parse(savedChapters));
       } catch (e) {
         setUnlockedIds([chapters[0]?.id].filter(Boolean));
       }
     } else if (chapters.length > 0) {
       const firstId = chapters[0].id;
       setUnlockedIds([firstId]);
-      localStorage.setItem(key, JSON.stringify([firstId]));
+      localStorage.setItem(idKey, JSON.stringify([firstId]));
     }
-  }, [storyId, chapters.length, isWriter]);
+  }, [storyId, chapters.length, isWriter, currentLockVersion]);
 
   const unlockNext = (currentId: string) => {
     if (isWriter) return null;
@@ -175,7 +189,8 @@ const createNewStory = (ownerId: string): Partial<Story> => ({
   ],
   isPublished: false,
   isDeleted: false,
-  ownerId
+  ownerId,
+  lockVersion: 0
 });
 
 class ErrorBoundary extends React.Component<{ children: React.ReactNode }, { hasError: boolean; error: Error | null }> {
@@ -1042,7 +1057,7 @@ function EditorView({ story, onBack, onUpdate, isLoggedIn, onIncrementCompletion
     [story.chapters, isLoggedIn]
   );
 
-  const { isUnlocked, unlockNext } = useReaderProgression(story.id, activeChapters, isLoggedIn);
+  const { isUnlocked, unlockNext } = useReaderProgression(story.id, activeChapters, isLoggedIn, story.lockVersion);
 
   const handleReorderChapters = (reorderedActive: Chapter[]) => {
     if (!isLoggedIn) return;
@@ -1244,9 +1259,10 @@ function EditorView({ story, onBack, onUpdate, isLoggedIn, onIncrementCompletion
           {isLoggedIn && (
             <button
               onClick={() => {
-                if (confirm("Master Fay, do you truly wish to wipe the memories of all who have tread these paths? (Reset all chapter completion counts)")) {
+                if (confirm("Master Fay, do you truly wish to wipe the memories of all who have tread these paths? (Reset all chapter completion counts and relock chapters for everyone)")) {
                   onUpdate({ 
-                    chapters: story.chapters.map(c => ({ ...c, completions: 0 })) 
+                    chapters: story.chapters.map(c => ({ ...c, completions: 0 })), 
+                    lockVersion: (story.lockVersion || 0) + 1
                   });
                 }
               }}
@@ -1331,9 +1347,10 @@ function EditorView({ story, onBack, onUpdate, isLoggedIn, onIncrementCompletion
         {isLoggedIn && (
           <button
             onClick={() => {
-              if (confirm("Master Fay, do you truly wish to wipe the memories of all who have tread these paths? (Reset all chapter completion counts)")) {
+              if (confirm("Master Fay, do you truly wish to wipe the memories of all who have tread these paths? (Reset all chapter completion counts and relock chapters for everyone)")) {
                 onUpdate({ 
-                  chapters: story.chapters.map(c => ({ ...c, completions: 0 })) 
+                  chapters: story.chapters.map(c => ({ ...c, completions: 0 })), 
+                  lockVersion: (story.lockVersion || 0) + 1
                 });
               }
             }}
