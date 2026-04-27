@@ -51,7 +51,8 @@ service cloud.firestore {
              (!('locations' in data) || data.locations is list) &&
              (!('factions' in data) || data.factions is list) &&
              (!('skills' in data) || data.skills is list) &&
-             (!('weapons' in data) || data.weapons is list);
+             (!('weapons' in data) || data.weapons is list) &&
+             (!('imageUrl' in data) || (data.imageUrl is string && data.imageUrl.size() <= 2000));
     }
 
     // Connection check document - must be public for the check to work
@@ -72,22 +73,60 @@ service cloud.firestore {
     }
 
     match /stories/{storyId} {
-      // Allow listing published stories for everyone, or all for owner/admin
-      allow list: if (resource.data.isPublished == true) || isSignedIn();
+      // Allow listing published and non-deleted stories for everyone
+      allow list: if (resource.data.get('isPublished', false) == true && resource.data.get('isDeleted', false) == false) || isSignedIn();
       
       // Get: public stories or owner
-      allow get: if (resource.data.isPublished == true) || isOwner(resource.data.ownerId) || isAdmin();
+      allow get: if (resource.data.get('isPublished', false) == true && resource.data.get('isDeleted', false) == false) || isOwner(resource.data.get('ownerId', '')) || isAdmin();
       
       allow create: if isSignedIn() && 
                       isValidStory(incoming()) && 
                       isOwner(incoming().ownerId);
                       
-      allow update: if (isSignedIn() && (isOwner(existing().ownerId) || isAdmin()) && isValidStory(incoming()) && incoming().ownerId == existing().ownerId) ||
-                      (existing().isPublished == true && 
-                       incoming().diff(existing()).affectedKeys().hasOnly(['chapters']) &&
+      allow update: if (isSignedIn() && (isOwner(existing().get('ownerId', '')) || isAdmin()) && isValidStory(incoming()) && incoming().get('ownerId', '') == existing().get('ownerId', '')) ||
+                      (existing().get('isPublished', false) == true && 
+                       incoming().diff(existing()).affectedKeys().hasOnly(['chapters', 'stats']) &&
                        isValidStory(incoming()));
                       
-      allow delete: if isSignedIn() && (isOwner(existing().ownerId) || isAdmin());
+      allow delete: if isSignedIn() && (isOwner(existing().get('ownerId', '')) || isAdmin());
+    }
+
+    function isValidSuggestion(data) {
+      return data.keys().hasAll(['storyId', 'storyOwnerId', 'chapterId', 'readerId', 'selectedText', 'suggestedText', 'status', 'createdAt']) &&
+             data.storyId is string &&
+             data.storyOwnerId is string &&
+             data.chapterId is string &&
+             data.readerId is string &&
+             data.selectedText is string && data.selectedText.size() <= 2000 &&
+             data.suggestedText is string && data.suggestedText.size() <= 6000 &&
+             data.status in ['pending', 'accepted', 'dismissed'] &&
+             data.createdAt is number;
+    }
+
+    match /suggestions/{suggestionId} {
+      allow read: if isSignedIn() && (
+        isOwner(resource.data.get('readerId', '')) || 
+        isOwner(resource.data.get('storyOwnerId', '')) ||
+        isAdmin()
+      );
+      
+      allow create: if isSignedIn() && 
+                      isValidSuggestion(incoming()) && 
+                      isOwner(incoming().readerId);
+                      
+      allow update: if isSignedIn() && (
+        // Master can change status
+        (isOwner(existing().get('storyOwnerId', '')) && 
+         incoming().diff(existing()).affectedKeys().hasOnly(['status', 'resolvedAt']) &&
+         isValidSuggestion(incoming())) 
+        ||
+        // Reader can edit their own (if still pending)
+        (isOwner(existing().get('readerId', '')) && existing().get('status', '') == 'pending' && isValidSuggestion(incoming()) && incoming().status == 'pending')
+        ||
+        isAdmin()
+      );
+      
+      allow delete: if isSignedIn() && (isOwner(existing().get('readerId', '')) || isAdmin());
     }
   }
 }

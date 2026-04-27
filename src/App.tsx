@@ -1,12 +1,12 @@
-import React, { useState, useEffect, useMemo } from 'react';
-import { Plus, Book, Trash2, ChevronLeft, Search, Wand2, User, ListTodo, FileText, RotateCcw, XCircle, Pin, PinOff, Sword, Zap, ExternalLink, Bookmark, Venus, Mars, HelpCircle, Eye, X, List, Sparkles, MessageSquare, Anchor, BookOpen, Send, GripVertical, Globe, MapPin, Ghost, ShieldAlert, Cloud, Check, Star } from 'lucide-react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
+import { Plus, Book, Trash2, ChevronLeft, Search, Wand2, User, ListTodo, FileText, RotateCcw, XCircle, Pin, PinOff, Sword, Zap, ExternalLink, Bookmark, Venus, Mars, HelpCircle, Eye, X, List, Sparkles, MessageSquare, Anchor, BookOpen, Send, GripVertical, Globe, MapPin, Ghost, ShieldAlert, Cloud, Check, Star, Bell, MessageCircle, Image as ImageIcon } from 'lucide-react';
 import Markdown from 'react-markdown';
 import { motion, AnimatePresence, Reorder } from 'motion/react';
-import { Story, AppView, Character, PlotPoint, Chapter, Creature, Location, Faction, Skill, Weapon } from './types';
+import { Story, AppView, Character, PlotPoint, Chapter, Creature, Location, Faction, Skill, Weapon, Suggestion } from './types';
 import { cn } from './lib/utils';
 import { GoogleGenAI } from "@google/genai";
 import { auth, db, handleFirestoreError, OperationType } from './firebase';
-import { onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, User as FirebaseUser } from 'firebase/auth';
+import { onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, signInAnonymously, User as FirebaseUser } from 'firebase/auth';
 import { collection, onSnapshot, query, where, addDoc, updateDoc, deleteDoc, doc, getDocFromServer, serverTimestamp, setDoc, getDoc } from 'firebase/firestore';
 
 // Utility for word count
@@ -190,6 +190,7 @@ const createNewStory = (ownerId: string): Partial<Story> => ({
   isPublished: false,
   isDeleted: false,
   ownerId,
+  imageUrl: '',
   lockVersion: 0
 });
 
@@ -263,6 +264,8 @@ function AppContent() {
   const [isAuthReady, setIsAuthReady] = useState(false);
   const [notification, setNotification] = useState<{ message: string; type: 'welcome' | 'goodbye' | 'error' } | null>(null);
   const [connectionStatus, setConnectionStatus] = useState<'connecting' | 'online' | 'offline' | 'error'>('connecting');
+  const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
+  const [showSuggestionsInbox, setShowSuggestionsInbox] = useState(false);
 
   const welcomeMessages = [
     "Welcome back, Master Fay. The worlds await your command.",
@@ -287,17 +290,40 @@ function AppContent() {
 
   // Firebase Auth Listener
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (firebaseUser) => {
-      setUser(firebaseUser);
-      setIsLoggedIn(!!firebaseUser);
-      setIsAuthReady(true);
+    let mounting = true;
+    const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
+      if (!mounting) return;
+
       if (!firebaseUser) {
-        setDashboardTab('public');
+        try {
+          // Attempt anonymous sign in for readers
+          // NOTE: This requires "Anonymous" to be enabled in your Firebase Console (Authentication > Sign-in method)
+          await signInAnonymously(auth);
+        } catch (e: any) {
+          if (e.code === 'auth/admin-restricted-operation') {
+            console.warn("Reader features require Anonymous Authentication to be enabled. Please enable 'Anonymous' in your Firebase console (Authentication -> Sign-in Method).");
+          } else {
+            console.warn("Anonymous auth failed:", e.message);
+          }
+          // If anonymous failed (restricted), we stay in unauthenticated mode
+          setUser(null);
+          setIsLoggedIn(false);
+          setDashboardTab('public');
+          setIsAuthReady(true);
+        }
       } else {
-        setDashboardTab('my');
+        setUser(firebaseUser);
+        const isMaster = firebaseUser.email === 'mdalaminsifat2022@gmail.com' && !firebaseUser.isAnonymous;
+        setIsLoggedIn(isMaster);
+        setIsAuthReady(true);
+        if (firebaseUser.isAnonymous || !isMaster) {
+          setDashboardTab('public');
+        } else {
+          setDashboardTab('my');
+        }
       }
     });
-    return () => unsubscribe();
+    return () => { mounting = false; unsubscribe(); };
   }, []);
 
   // Firestore connection test
@@ -333,8 +359,8 @@ function AppContent() {
     const storiesRef = collection(db, 'stories');
     // For readers or public tab, show all published stories. For writers in 'my' tab, show their own.
     const q = isLoggedIn && user && dashboardTab === 'my'
-      ? query(storiesRef, where('ownerId', '==', user.uid))
-      : query(storiesRef, where('isPublished', '==', true));
+      ? query(storiesRef, where('ownerId', '==', user.uid), where('isDeleted', '==', false))
+      : query(storiesRef, where('isPublished', '==', true), where('isDeleted', '==', false));
 
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const fetchedStories = snapshot.docs.map(doc => ({
@@ -349,6 +375,66 @@ function AppContent() {
     return () => unsubscribe();
   }, [isAuthReady, isLoggedIn, user]);
 
+  // Firestore Suggestions Listener
+  useEffect(() => {
+    if (!isAuthReady || !user) {
+      setSuggestions([]);
+      return;
+    }
+
+    const suggestionsRef = collection(db, 'suggestions');
+    
+    // Define queries - we always check both paths but they are naturally restricted by uid
+    // As Master (Owner of stories)
+    const qMaster = query(suggestionsRef, where('storyOwnerId', '==', user.uid));
+    // As Reader (Person who made highlights)
+    const qReader = query(suggestionsRef, where('readerId', '==', user.uid));
+
+    const handleSnapshot = (snapshot: any, type: 'master' | 'reader') => {
+      const sugs = snapshot.docs.map((doc: any) => ({
+        id: doc.id,
+        ...doc.data()
+      })) as Suggestion[];
+      
+      setSuggestions(prev => {
+        const otherType = prev.filter(s => type === 'master' ? s.readerId !== user.uid : s.storyOwnerId !== user.uid);
+        // Merge and avoid duplicates (if master is reading their own story)
+        const combined = [...otherType, ...sugs];
+        const unique = combined.reduce((acc, current) => {
+          const x = acc.find(item => item.id === current.id);
+          if (!x) return acc.concat([current]);
+          else return acc;
+        }, [] as Suggestion[]);
+        return unique;
+      });
+    };
+
+    const unsubMaster = (isLoggedIn && user) ? onSnapshot(qMaster, (snap) => handleSnapshot(snap, 'master'), (err) => {
+      handleFirestoreError(err, OperationType.GET, 'suggestions');
+    }) : () => {};
+
+    const unsubReader = (user) ? onSnapshot(qReader, (snap) => handleSnapshot(snap, 'reader'), (err) => {
+       handleFirestoreError(err, OperationType.GET, 'suggestions');
+    }) : () => {};
+
+    return () => { unsubMaster(); unsubReader(); };
+  }, [isAuthReady, isLoggedIn, user]);
+
+  const pendingSuggestionsCount = useMemo(() => {
+    if (!isLoggedIn || !user) return 0;
+    return suggestions.filter(s => s.storyOwnerId === user.uid && s.status === 'pending').length;
+  }, [suggestions, isLoggedIn, user]);
+
+  const updateSuggestionStatus = async (id: string, status: 'pending' | 'accepted' | 'dismissed') => {
+    try {
+      await updateDoc(doc(db, 'suggestions', id), {
+        status,
+        resolvedAt: status === 'pending' ? null : Date.now()
+      });
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `suggestions/${id}`);
+    }
+  };
 
   const handleLogout = async () => {
     try {
@@ -627,6 +713,23 @@ function AppContent() {
                     {showRecycleBin ? <ChevronLeft size={24} /> : <Trash2 size={24} />}
                   </button>
                 )}
+                {isLoggedIn && (
+                  <button
+                    onClick={() => setShowSuggestionsInbox(true)}
+                    title="Suggestions from Readers"
+                    className={cn(
+                      "flex items-center justify-center w-10 h-10 md:w-12 md:h-12 rounded-full font-medium transition-all shadow-sm relative",
+                      pendingSuggestionsCount > 0 ? "bg-amber-100 text-amber-700 animate-pulse border-2 border-amber-200" : "bg-brand-100 text-brand-700 hover:bg-brand-200"
+                    )}
+                  >
+                    <Bell size={24} />
+                    {pendingSuggestionsCount > 0 && (
+                      <span className="absolute -top-1 -right-1 w-5 h-5 bg-red-500 text-white text-[10px] font-bold rounded-full flex items-center justify-center border-2 border-white shadow-sm">
+                        {pendingSuggestionsCount}
+                      </span>
+                    )}
+                  </button>
+                )}
                 <button
                   onClick={() => isLoggedIn ? handleLogout() : setView('login')}
                   title={isLoggedIn ? "Log Out" : "Log In"}
@@ -696,18 +799,50 @@ function AppContent() {
                           }
                         }}
                         className={cn(
-                          "group bg-white p-6 rounded-3xl border-2 transition-all shadow-sm hover:shadow-md relative overflow-hidden",
+                          "group bg-white p-0 rounded-3xl border-2 transition-all shadow-sm hover:shadow-md relative overflow-hidden flex flex-col h-full",
                           story.isPinned ? "border-brand-300 ring-2 ring-brand-100" : "border-transparent",
                           !story.isDeleted && "hover:border-brand-200 cursor-pointer"
                         )}
                       >
-                        {story.isPinned && (
-                          <div className="absolute top-0 left-0 bg-brand-800 text-brand-50 p-1 rounded-br-xl">
-                            <Pin size={12} fill="currentColor" />
+                        {/* Cover Image */}
+                        {story.imageUrl ? (
+                          <div className="w-full h-40 relative group-hover:h-44 transition-all duration-500 overflow-hidden">
+                            <img 
+                              src={story.imageUrl} 
+                              alt={story.title}
+                              referrerPolicy="no-referrer"
+                              className="w-full h-full object-cover"
+                              onError={(e) => {
+                                e.currentTarget.style.display = 'none';
+                                const parent = e.currentTarget.parentElement;
+                                if (parent) {
+                                  const fallback = document.createElement('div');
+                                  fallback.className = "w-full h-full flex flex-col items-center justify-center text-brand-300 p-4 text-center bg-brand-50";
+                                  fallback.innerHTML = `
+                                    <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="mb-2"><rect width="18" height="18" x="3" y="3" rx="2" ry="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"/></svg>
+                                    <span class="text-[10px] font-bold">Image Failed</span>
+                                    <p class="text-[8px] mt-1 text-brand-400">If using Pinterest, "Copy Image Address" instead of the Page URL.</p>
+                                  `;
+                                  parent.appendChild(fallback);
+                                }
+                              }}
+                            />
+                            <div className="absolute inset-0 bg-gradient-to-t from-white via-transparent to-transparent" />
+                          </div>
+                        ) : (
+                          <div className="w-full h-24 bg-brand-50/50 flex items-center justify-center text-brand-200">
+                             <Book size={40} />
                           </div>
                         )}
-                        <div className="flex justify-between items-start mb-4">
-                          <div className="flex gap-2 order-2">
+
+                        <div className="p-6 pt-2 flex-1 flex flex-col">
+                          {story.isPinned && (
+                            <div className="absolute top-0 left-0 bg-brand-800 text-brand-50 p-1 rounded-br-xl z-10">
+                              <Pin size={12} fill="currentColor" />
+                            </div>
+                          )}
+                          <div className="flex justify-between items-start mb-4">
+                            <div className="flex gap-2 order-2">
                             {story.isPublished && !story.isDeleted && (
                               <div className="flex items-center gap-1 px-2 py-1 bg-green-100 text-green-700 rounded-lg text-[10px] font-bold uppercase tracking-wider">
                                 <Eye size={12} /> Published
@@ -756,7 +891,10 @@ function AppContent() {
                               </>
                             )}
                           </div>
-                          <div className="p-3 bg-brand-100 rounded-2xl text-brand-700 group-hover:bg-brand-800 group-hover:text-brand-50 transition-colors order-1">
+                          <div className={cn(
+                            "p-3 bg-brand-100 rounded-2xl text-brand-700 group-hover:bg-brand-800 group-hover:text-brand-50 transition-colors order-1",
+                            story.imageUrl && "shadow-lg bg-white/80 backdrop-blur-sm"
+                          )}>
                             <Book size={24} />
                           </div>
                         </div>
@@ -795,7 +933,8 @@ function AppContent() {
                             {new Date(story.lastModified).toLocaleDateString()}
                           </span>
                         </div>
-                      </motion.div>
+                      </div>
+                    </motion.div>
                     ))}
                   </div>
                 )}
@@ -869,11 +1008,24 @@ function AppContent() {
             onBack={() => setView('dashboard')}
             onUpdate={updateStory}
             isLoggedIn={isLoggedIn}
+            user={user}
+            suggestions={suggestions}
+            onUpdateSuggestionStatus={updateSuggestionStatus}
+            onOpenSuggestions={() => setShowSuggestionsInbox(true)}
+            pendingSuggestionsCount={pendingSuggestionsCount}
             onIncrementCompletion={incrementChapterCompletion}
             onToggleChapterPublish={toggleChapterPublish}
           />
         )}
       </AnimatePresence>
+
+      <SuggestionsInbox 
+        isOpen={showSuggestionsInbox} 
+        onClose={() => setShowSuggestionsInbox(false)}
+        suggestions={suggestions.filter(s => s.storyOwnerId === (user?.uid || ''))}
+        onResolve={updateSuggestionStatus}
+        stories={stories}
+      />
 
       {/* Notification Toast */}
       <AnimatePresence>
@@ -1035,11 +1187,28 @@ function FinishChapterButton({ onFinish, isFinished }: { onFinish: () => void; i
   );
 }
 
-function EditorView({ story, onBack, onUpdate, isLoggedIn, onIncrementCompletion, onToggleChapterPublish }: { 
+function EditorView({ 
+  story, 
+  onBack, 
+  onUpdate, 
+  isLoggedIn, 
+  user,
+  suggestions,
+  onUpdateSuggestionStatus,
+  onOpenSuggestions,
+  pendingSuggestionsCount,
+  onIncrementCompletion, 
+  onToggleChapterPublish 
+}: { 
   story: Story; 
   onBack: () => void; 
   onUpdate: (updates: Partial<Story>) => void;
   isLoggedIn: boolean;
+  user: FirebaseUser | null;
+  suggestions: Suggestion[];
+  onUpdateSuggestionStatus: (id: string, status: 'accepted' | 'dismissed') => Promise<void>;
+  onOpenSuggestions: () => void;
+  pendingSuggestionsCount: number;
   onIncrementCompletion: (storyId: string, chapterId: string) => Promise<void>;
   onToggleChapterPublish: (storyId: string, chapterId: string) => Promise<void>;
 }) {
@@ -1080,9 +1249,11 @@ function EditorView({ story, onBack, onUpdate, isLoggedIn, onIncrementCompletion
   const currentChapter = story.chapters.find(c => c.id === currentChapterId && !c.isDeleted) || activeChapters[0];
   const [localContent, setLocalContent] = useState(currentChapter?.content || '');
   const [isSaving, setIsSaving] = useState(false);
+  const [isReviewMode, setIsReviewMode] = useState(false);
 
   useEffect(() => {
     setLocalContent(currentChapter?.content || '');
+    setIsReviewMode(false);
   }, [currentChapter?.id]);
 
   // Debounced update for Firestore
@@ -1120,6 +1291,7 @@ function EditorView({ story, onBack, onUpdate, isLoggedIn, onIncrementCompletion
       id: crypto.randomUUID(),
       title: `Chapter ${activeCount + 1}`,
       content: '',
+      imageUrl: '',
       plotPoints: [],
       order: activeCount
     };
@@ -1197,6 +1369,28 @@ function EditorView({ story, onBack, onUpdate, isLoggedIn, onIncrementCompletion
                 )}
                 placeholder="Novel Subtitle"
               />
+
+              {isLoggedIn && (
+                <div className="flex items-center gap-2 mt-1 max-w-xs">
+                  <div className="p-1.5 bg-brand-50 rounded-lg text-brand-400">
+                    <ImageIcon size={14} />
+                  </div>
+                  <div className="flex flex-col flex-1">
+                    <DebouncedInput
+                      type="text"
+                      value={story.imageUrl || ''}
+                      onChange={(val) => onUpdate({ imageUrl: val })}
+                      className="text-[10px] bg-transparent border-none focus:outline-none text-brand-400 placeholder:text-brand-200 truncate"
+                      placeholder="Cover Photo URL (Paste Pinterest Link)"
+                    />
+                    {story.imageUrl && !story.imageUrl.match(/\.(jpg|jpeg|png|webp|gif|svg|avif)/i) && !story.imageUrl.includes('pinimg.com') && (
+                      <span className="text-[8px] text-amber-600 font-medium px-1 leading-none mt-0.5">
+                        Tip: Right-click image and "Copy Image Address" for Best results
+                      </span>
+                    )}
+                  </div>
+                </div>
+              )}
               
               <div className="flex flex-wrap gap-1 mt-1">
                 {story.genres && story.genres.map(g => (
@@ -1326,18 +1520,20 @@ function EditorView({ story, onBack, onUpdate, isLoggedIn, onIncrementCompletion
             </button>
           )}
           {isLoggedIn && (
-            <button
-              onClick={() => setShowAiHelper(!showAiHelper)}
-              className={cn(
-                "flex items-center gap-2 px-3 md:px-4 py-2 rounded-full font-medium transition-all",
-                showAiHelper 
-                  ? "bg-brand-800 text-brand-50 shadow-inner" 
-                  : "bg-white border-2 border-brand-100 text-brand-700 hover:border-brand-300"
-              )}
-            >
-              <Wand2 size={18} />
-              <span className="hidden md:inline">AI Muse</span>
-            </button>
+            <>
+              <button
+                onClick={() => setShowAiHelper(!showAiHelper)}
+                className={cn(
+                  "flex items-center gap-2 px-3 md:px-4 py-2 rounded-full font-medium transition-all",
+                  showAiHelper 
+                    ? "bg-brand-800 text-brand-50 shadow-inner" 
+                    : "bg-white border-2 border-brand-100 text-brand-700 hover:border-brand-300"
+                )}
+              >
+                <Wand2 size={18} />
+                <span className="hidden md:inline">AI Muse</span>
+              </button>
+            </>
           )}
         </div>
       </header>
@@ -1518,28 +1714,86 @@ function EditorView({ story, onBack, onUpdate, isLoggedIn, onIncrementCompletion
           <div className="max-w-3xl mx-auto px-4 md:px-8 py-6 md:py-12 min-h-full">
             {activeTab === 'write' && currentChapter && (
               <div className="h-full flex flex-col space-y-6">
-                <input
-                  type="text"
-                  value={currentChapter.title}
-                  onChange={(e) => updateChapter(currentChapter.id, { title: e.target.value })}
-                  readOnly={!isLoggedIn}
-                  className={cn(
-                    "text-2xl md:text-3xl font-bold font-serif bg-transparent border-none focus:outline-none text-brand-900 placeholder:text-brand-200",
-                    !isLoggedIn && "cursor-default"
-                  )}
-                  placeholder="Chapter Title"
-                />
-                <textarea
-                  value={localContent}
-                  onChange={handleContentChange}
-                  readOnly={!isLoggedIn}
-                  className={cn(
-                    "w-full flex-1 min-h-[60vh] bg-transparent border-none focus:outline-none resize-none writing-area placeholder:text-brand-200",
-                    !isLoggedIn && "cursor-default"
-                  )}
-                  placeholder={isLoggedIn ? "Start writing your chapter..." : "No content yet."}
-                  autoFocus={isLoggedIn}
-                />
+                {/* Chapter Cover Hero Section */}
+                {currentChapter.imageUrl && (
+                  <motion.div 
+                    initial={{ opacity: 0, y: 20 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    className="w-full h-48 md:h-64 rounded-3xl overflow-hidden shadow-2xl relative group mb-2"
+                  >
+                    <img 
+                      src={currentChapter.imageUrl} 
+                      alt={currentChapter.title} 
+                      referrerPolicy="no-referrer"
+                      className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-700"
+                      onError={(e) => {
+                        e.currentTarget.style.display = 'none';
+                        const parent = e.currentTarget.parentElement;
+                        if (parent) {
+                          const fallback = document.createElement('div');
+                          fallback.className = "w-full h-full flex flex-col items-center justify-center text-white/50 p-4 text-center bg-brand-900";
+                          fallback.innerHTML = `
+                            <svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="mb-2"><rect width="18" height="18" x="3" y="3" rx="2" ry="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"/></svg>
+                            <span class="text-sm font-bold">Image Failed to Load</span>
+                            <p class="text-xs mt-1 text-white/40">Try "Copy Image Address" instead of pasting the page URL.</p>
+                          `;
+                          parent.appendChild(fallback);
+                        }
+                      }}
+                    />
+                    <div className="absolute inset-0 bg-gradient-to-t from-brand-900/60 to-transparent" />
+                    <div className="absolute bottom-6 left-6 right-6">
+                       <h2 className="text-white text-lg font-serif italic opacity-80">{currentChapter.title}</h2>
+                    </div>
+                  </motion.div>
+                )}
+                
+                <div className="space-y-4">
+                  <div className="flex flex-col gap-2">
+                    <input
+                      type="text"
+                      value={currentChapter.title}
+                      onChange={(e) => updateChapter(currentChapter.id, { title: e.target.value })}
+                      readOnly={!isLoggedIn}
+                      className={cn(
+                        "text-2xl md:text-3xl font-bold font-serif bg-transparent border-none focus:outline-none text-brand-900 placeholder:text-brand-200 w-full",
+                        !isLoggedIn && "cursor-default"
+                      )}
+                      placeholder="Chapter Title"
+                    />
+                    {isLoggedIn && (
+                      <div className="flex items-center gap-2 px-1 opacity-40 hover:opacity-100 transition-opacity">
+                        <ImageIcon size={14} className="text-brand-400 shrink-0" />
+                        <input
+                          type="text"
+                          value={currentChapter.imageUrl || ''}
+                          onChange={(e) => updateChapter(currentChapter.id, { imageUrl: e.target.value })}
+                          className="text-[10px] bg-transparent border-none focus:outline-none text-brand-400 placeholder:text-brand-200 w-full"
+                          placeholder="Chapter Cover Image URL (Pinterest Link)"
+                        />
+                      </div>
+                    )}
+                  </div>
+                </div>
+                {isLoggedIn && !isReviewMode ? (
+                  <textarea
+                    value={localContent}
+                    onChange={handleContentChange}
+                    className="w-full flex-1 min-h-[60vh] bg-transparent border-none focus:outline-none resize-none writing-area placeholder:text-brand-200"
+                    placeholder="Start writing your chapter..."
+                    autoFocus
+                  />
+                ) : (
+                  <ReaderContentView
+                    content={localContent}
+                    chapterId={currentChapter.id}
+                    storyId={story.id}
+                    storyOwnerId={story.ownerId}
+                    suggestions={suggestions.filter(s => s.chapterId === currentChapter.id)}
+                    user={user}
+                    onUpdateSuggestionStatus={onUpdateSuggestionStatus}
+                  />
+                )}
                 <div className="flex justify-between items-center text-xs text-brand-400 font-medium pt-4 border-t border-brand-100">
                   <div className="flex items-center gap-2">
                     {getWordCount(localContent)} words in this chapter
@@ -1774,24 +2028,75 @@ function CharacterManager({ storyTitle, characters, onUpdate, isLoggedIn }: { st
             "bg-white p-4 md:p-6 rounded-3xl border-2 transition-all shadow-sm space-y-4 relative overflow-hidden",
             char.isPinned ? "border-brand-300 ring-2 ring-brand-100" : "border-brand-100"
           )}>
-            <div className="absolute top-0 right-0 bg-brand-100 text-brand-600 text-[10px] font-bold px-2 py-1 rounded-bl-xl">
+            <div className="absolute top-0 right-0 bg-brand-100 text-brand-600 text-[10px] font-bold px-2 py-1 rounded-bl-xl z-10">
               #{index + 1}
             </div>
-            <div className="flex flex-col sm:flex-row gap-4 pt-2">
+            <div className="flex flex-col gap-6 pt-2">
+              {/* Character Image Preview */}
+              {char.imageUrl && (
+                <div className="w-full h-48 md:h-64 bg-brand-50 rounded-2xl overflow-hidden shrink-0 border-2 border-brand-100 relative group/img">
+                  <img 
+                    src={char.imageUrl} 
+                    alt={char.name} 
+                    referrerPolicy="no-referrer"
+                    className="w-full h-full object-cover"
+                    onError={(e) => {
+                      e.currentTarget.style.display = 'none';
+                      const parent = e.currentTarget.parentElement;
+                      if (parent) {
+                        const fallback = document.createElement('div');
+                        fallback.className = "w-full h-full flex flex-col items-center justify-center text-brand-300 p-2 text-center bg-brand-50";
+                        fallback.innerHTML = `
+                          <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="3" rx="2" ry="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"/></svg>
+                          <span class="text-[8px] mt-2 font-medium">Image failed. Right-click Pinterest image and "Copy Image Address" instead of pasting the page URL</span>
+                        `;
+                        parent.appendChild(fallback);
+                      }
+                    }}
+                  />
+                  {isLoggedIn && (
+                    <div className="absolute inset-0 bg-black/40 opacity-0 group-hover/img:opacity-100 transition-opacity flex flex-col items-center justify-center p-2 text-center pointer-events-none">
+                      <ImageIcon size={24} className="text-white mb-2" />
+                      <span className="text-xs text-white font-bold leading-tight">Paste URL in the Link field below</span>
+                    </div>
+                  )}
+                </div>
+              )}
+
               <div className="flex-1 space-y-4">
                   <div className="flex flex-col sm:flex-row gap-4 items-start sm:items-center">
                     <div className="flex-1 flex flex-col gap-3 w-full">
                       <div className="flex flex-col sm:flex-row gap-3 sm:items-center">
-                        <DebouncedInput
-                          placeholder="Name"
-                          value={char.name}
-                          onChange={(val) => updateChar(char.id, { name: val })}
-                          readOnly={!isLoggedIn}
-                          className={cn(
-                            "flex-1 text-lg md:text-xl font-bold border-b-2 border-transparent focus:border-brand-200 focus:outline-none",
-                            !isLoggedIn && "cursor-default"
+                        <div className="flex-1 flex flex-col gap-1">
+                          <DebouncedInput
+                            placeholder="Name"
+                            value={char.name}
+                            onChange={(val) => updateChar(char.id, { name: val })}
+                            readOnly={!isLoggedIn}
+                            className={cn(
+                              "text-lg md:text-xl font-bold border-b-2 border-transparent focus:border-brand-200 focus:outline-none bg-transparent",
+                              !isLoggedIn && "cursor-default"
+                            )}
+                          />
+                          {isLoggedIn && (
+                            <div className="flex flex-col gap-1 opacity-60 focus-within:opacity-100 transition-opacity">
+                              <div className="flex items-center gap-1">
+                                <ImageIcon size={10} className="text-brand-400" />
+                                <DebouncedInput
+                                  placeholder="Image URL (Pinterest Link)"
+                                  value={char.imageUrl || ''}
+                                  onChange={(val) => updateChar(char.id, { imageUrl: val })}
+                                  className="text-[9px] bg-transparent border-none focus:outline-none text-brand-400 w-full"
+                                />
+                              </div>
+                              {char.imageUrl && !char.imageUrl.match(/\.(jpg|jpeg|png|webp|gif|svg|avif)/i) && !char.imageUrl.includes('pinimg.com') && (
+                                <span className="text-[7px] text-amber-600 font-medium leading-none">
+                                  Use "Copy Image Address" for best results
+                                </span>
+                              )}
+                            </div>
                           )}
-                        />
+                        </div>
                         <div className="flex items-center gap-2">
                           <DebouncedInput
                             placeholder="Role (e.g. Protagonist)"
@@ -2018,6 +2323,423 @@ function PlotManager({ storyTitle, plotPoints, onUpdate, isLoggedIn }: { storyTi
   );
 }
 
+function HighlightedMarkdown({ 
+  content, 
+  suggestions,
+  onOpenSuggestion
+}: { 
+  content: string; 
+  suggestions: Suggestion[];
+  onOpenSuggestion?: (s: Suggestion) => void;
+}) {
+  // Only highlight pending suggestions
+  const activeSuggestions = suggestions.filter(s => s.status === 'pending');
+  
+  if (activeSuggestions.length === 0) {
+    return <>{content}</>;
+  }
+
+  // Pre-process content to inject highlights
+  // Note: This is a simple implementation that matches exact strings.
+  // In a more robust system, we would use offsets, but for this app's scale, text matching works.
+  let highlightedContent = content;
+  
+  // We sort by length descending to avoid nested replacement issues if one suggestion is a subset of another
+  const sortedSuggestions = [...activeSuggestions].sort((a, b) => b.selectedText.length - a.selectedText.length);
+
+  // We use a temporary tokenization strategy to avoid replacing within already replaced blocks
+  sortedSuggestions.forEach((s, idx) => {
+    const token = `__SUGGESTION_${idx}__`;
+    // Escape regex special chars
+    const escaped = s.selectedText.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const regex = new RegExp(escaped, 'g');
+    
+    if (highlightedContent.includes(s.selectedText)) {
+      highlightedContent = highlightedContent.replace(regex, token);
+    }
+  });
+
+  // Split tokens to render JSX spans for highlights and raw text strings for the rest
+  const parts = highlightedContent.split(/(__SUGGESTION_\d+__)/);
+
+  return (
+    <>
+      {parts.map((part, i) => {
+        if (part.startsWith('__SUGGESTION_')) {
+          const sugIdx = parseInt(part.match(/\d+/)![0]);
+          const sug = sortedSuggestions[sugIdx];
+          return (
+            <span 
+              key={i} 
+              onClick={() => onOpenSuggestion?.(sug)}
+              className="bg-amber-100 border-b-2 border-amber-400 cursor-pointer hover:bg-amber-200 transition-colors px-0.5 rounded-sm relative group decoration-clone"
+              title="Click to view suggestion"
+            >
+              {sug.selectedText}
+              <span className="absolute -top-8 left-1/2 -translate-x-1/2 bg-brand-800 text-white text-[10px] py-1 px-2 rounded opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity whitespace-nowrap z-50">
+                Reader Suggestion
+              </span>
+            </span>
+          );
+        }
+        return <React.Fragment key={i}>{part}</React.Fragment>;
+      })}
+    </>
+  );
+}
+
+function ReaderContentView({ 
+  content, 
+  chapterId, 
+  storyId, 
+  storyOwnerId, 
+  suggestions,
+  user,
+  onUpdateSuggestionStatus
+}: { 
+  content: string; 
+  chapterId: string; 
+  storyId: string; 
+  storyOwnerId: string; 
+  suggestions: Suggestion[];
+  user: FirebaseUser | null;
+  onUpdateSuggestionStatus?: (id: string, status: 'accepted' | 'dismissed' | 'pending') => Promise<void>;
+}) {
+  const [selection, setSelection] = useState<{ text: string; rect: DOMRect } | null>(null);
+  const [showSuggestModal, setShowSuggestModal] = useState(false);
+  const [suggestionText, setSuggestionText] = useState('');
+  const contentRef = useRef<HTMLDivElement>(null);
+
+  const [viewingSuggestion, setViewingSuggestion] = useState<Suggestion | null>(null);
+
+  const handleMouseUp = () => {
+    if (viewingSuggestion) return;
+    const sel = window.getSelection();
+    if (sel && sel.rangeCount > 0 && sel.toString().trim().length > 0) {
+      const range = sel.getRangeAt(0);
+      if (contentRef.current?.contains(range.commonAncestorContainer)) {
+        const rect = range.getBoundingClientRect();
+        setSelection({ text: sel.toString(), rect });
+      } else {
+        setSelection(null);
+      }
+    } else {
+      setSelection(null);
+    }
+  };
+
+  const submitSuggestion = async () => {
+    if (!selection || !user) return;
+    try {
+      await addDoc(collection(db, 'suggestions'), {
+        storyId,
+        storyOwnerId,
+        chapterId,
+        readerId: user.uid,
+        readerEmail: user.email || 'Anonymous Reader',
+        selectedText: selection.text,
+        suggestedText: suggestionText,
+        status: 'pending',
+        createdAt: Date.now()
+      });
+      setShowSuggestModal(false);
+      setSuggestionText('');
+      setSelection(null);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.CREATE, 'suggestions');
+    }
+  };
+
+  return (
+    <div className="relative" onMouseUp={handleMouseUp}>
+      <div ref={contentRef} className="writing-area whitespace-pre-wrap text-brand-900 leading-relaxed min-h-[60vh] selection:bg-amber-200">
+        <HighlightedMarkdown 
+          content={content} 
+          suggestions={suggestions.filter(s => s.readerId === user?.uid || s.storyOwnerId === user?.uid)}
+          onOpenSuggestion={(s) => setViewingSuggestion(s)}
+        />
+      </div>
+      
+      {selection && !showSuggestModal && (
+        <motion.button
+          initial={{ opacity: 0, scale: 0.8 }}
+          animate={{ opacity: 1, scale: 1 }}
+          style={{ 
+            position: 'fixed', 
+            top: selection.rect.top - 50, 
+            left: Math.max(20, selection.rect.left + (selection.rect.width / 2) - 60)
+          }}
+          onClick={() => setShowSuggestModal(true)}
+          className="z-[100] bg-brand-800 text-white px-4 py-2 rounded-full text-xs font-bold shadow-2xl flex items-center gap-2 hover:bg-brand-700 transition-all"
+        >
+          <Sparkles size={14} className="text-amber-400" /> Suggest Better Word
+        </motion.button>
+      )}
+
+      <AnimatePresence>
+        {showSuggestModal && (
+          <motion.div 
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[110] flex items-center justify-center p-4 bg-brand-900/40 backdrop-blur-sm"
+          >
+            <motion.div 
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              className="bg-white w-full max-w-md p-8 rounded-3xl shadow-2xl space-y-6"
+            >
+              <div>
+                <h3 className="text-xl font-bold font-serif text-brand-900 mb-1">Make a Suggestion</h3>
+                <p className="text-xs text-brand-400">Your insight will be shared privately with Master Fay.</p>
+              </div>
+
+              <div className="space-y-2">
+                <p className="text-[10px] font-bold text-brand-400 uppercase tracking-widest">Original Text:</p>
+                <div className="p-4 bg-brand-50 rounded-2xl text-sm italic text-brand-600 border-l-4 border-brand-200">
+                  "{selection?.text}"
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <p className="text-[10px] font-bold text-brand-400 uppercase tracking-widest">Your Suggestion:</p>
+                <textarea
+                  autoFocus
+                  value={suggestionText}
+                  onChange={(e) => setSuggestionText(e.target.value)}
+                  className="w-full bg-brand-50 border-2 border-transparent focus:border-brand-200 focus:bg-white rounded-2xl py-4 px-5 outline-none transition-all text-sm h-32 resize-none"
+                  placeholder="How would you rewrite this part?"
+                />
+              </div>
+
+              <div className="flex gap-3">
+                <button
+                  onClick={submitSuggestion}
+                  disabled={!suggestionText.trim()}
+                  className="flex-1 bg-brand-800 text-brand-50 py-4 rounded-2xl font-bold hover:bg-brand-700 transition-all disabled:opacity-50 shadow-lg"
+                >
+                  Send to Master
+                </button>
+                <button
+                  onClick={() => { setShowSuggestModal(false); setSelection(null); }}
+                  className="px-6 py-4 rounded-2xl font-bold text-brand-400 hover:text-brand-800 transition-colors"
+                >
+                  Cancel
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+
+        {viewingSuggestion && (
+          <motion.div 
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[110] flex items-center justify-center p-4 bg-brand-900/40 backdrop-blur-sm"
+          >
+            <motion.div 
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              className="bg-white w-full max-w-md p-8 rounded-3xl shadow-2xl space-y-6"
+            >
+              <div className="flex justify-between items-start">
+                <div>
+                  <h3 className="text-xl font-bold font-serif text-brand-900 mb-1">Your Suggestion</h3>
+                  <p className="text-xs text-brand-400">Status: <span className="capitalize font-bold text-brand-600">{viewingSuggestion.status}</span></p>
+                </div>
+                <button onClick={() => setViewingSuggestion(null)} className="p-2 hover:bg-brand-50 rounded-full">
+                  <XCircle size={20} className="text-brand-300" />
+                </button>
+              </div>
+
+              <div className="space-y-4">
+                <div className="space-y-1">
+                  <p className="text-[10px] font-bold text-brand-400 uppercase">Selected Part:</p>
+                  <p className="text-sm italic text-brand-600 bg-brand-50 p-4 rounded-xl border-l-4 border-brand-200">"{viewingSuggestion.selectedText}"</p>
+                </div>
+                <div className="space-y-1">
+                  <p className="text-[10px] font-bold text-brand-400 uppercase">Suggested Rewrite:</p>
+                  <div className="text-sm text-brand-800 bg-brand-50 p-4 rounded-xl border border-brand-100 italic">
+                    {viewingSuggestion.suggestedText}
+                  </div>
+                </div>
+              </div>
+
+              {user?.uid === storyOwnerId ? (
+                <div className="flex gap-3">
+                  <button
+                    onClick={async () => {
+                      if (onUpdateSuggestionStatus) await onUpdateSuggestionStatus(viewingSuggestion.id, 'accepted');
+                      setViewingSuggestion(null);
+                    }}
+                    className="flex-1 bg-brand-800 text-brand-50 py-4 rounded-2xl font-bold hover:bg-brand-700 transition-all shadow-lg text-xs"
+                  >
+                    Keep Idea
+                  </button>
+                  <button
+                    onClick={async () => {
+                      if (onUpdateSuggestionStatus) await onUpdateSuggestionStatus(viewingSuggestion.id, 'dismissed');
+                      setViewingSuggestion(null);
+                    }}
+                    className="flex-1 bg-white text-brand-500 py-4 rounded-2xl font-bold border border-brand-100 hover:bg-brand-50 transition-all text-xs"
+                  >
+                    Unhighlight
+                  </button>
+                </div>
+              ) : (
+                <button
+                  onClick={() => setViewingSuggestion(null)}
+                  className="w-full bg-brand-800 text-brand-50 py-4 rounded-2xl font-bold hover:bg-brand-700 transition-all shadow-lg"
+                >
+                  Close View
+                </button>
+              )}
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
+
+function SuggestionsInbox({ 
+  isOpen, 
+  onClose, 
+  suggestions, 
+  onResolve,
+  stories
+}: { 
+  isOpen: boolean; 
+  onClose: () => void; 
+  suggestions: Suggestion[];
+  onResolve: (id: string, status: 'pending' | 'accepted' | 'dismissed') => Promise<void>;
+  stories: Story[];
+}) {
+  const pending = suggestions.filter(s => s.status === 'pending').sort((a, b) => b.createdAt - a.createdAt);
+  const resolved = suggestions.filter(s => s.status !== 'pending').sort((a, b) => (b.resolvedAt || 0) - (a.resolvedAt || 0));
+
+  return (
+    <AnimatePresence>
+      {isOpen && (
+        <>
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            onClick={onClose}
+            className="fixed inset-0 bg-brand-900/40 backdrop-blur-sm z-[110]"
+          />
+          <motion.aside
+            initial={{ x: '100%' }}
+            animate={{ x: 0 }}
+            exit={{ x: '100%' }}
+            transition={{ type: 'spring', damping: 25, stiffness: 200 }}
+            className="fixed right-0 top-0 bottom-0 w-full sm:w-[450px] bg-white shadow-2xl z-[120] flex flex-col border-l border-brand-100"
+          >
+            <div className="p-6 border-b border-brand-100 flex items-center justify-between bg-brand-50/50">
+              <div className="flex items-center gap-3">
+                <div className="p-2 bg-amber-100 text-amber-700 rounded-xl">
+                  <Bell size={24} />
+                </div>
+                <div>
+                  <h3 className="text-xl font-bold font-serif text-brand-900">Reader Suggestions</h3>
+                  <p className="text-xs text-brand-500 font-medium">{pending.length} pending insights</p>
+                </div>
+              </div>
+              <button 
+                onClick={onClose}
+                className="p-2 hover:bg-brand-100 rounded-full text-brand-400 hover:text-brand-600 transition-all"
+              >
+                <XCircle size={24} />
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-6 space-y-8 no-scrollbar">
+              {pending.length > 0 ? (
+                <div className="space-y-4">
+                  <h4 className="text-[10px] font-bold text-brand-400 uppercase tracking-widest px-1">New Submissions</h4>
+                  {pending.map(s => {
+                    const story = stories.find(st => st.id === s.storyId);
+                    const chapter = story?.chapters.find(c => c.id === s.chapterId);
+                    return (
+                      <div key={s.id} className="bg-brand-50/50 border border-brand-100 rounded-2xl p-5 space-y-4 hover:border-brand-200 transition-colors shadow-sm">
+                        <div className="flex items-center justify-between">
+                          <span className="text-[10px] bg-white px-2 py-0.5 rounded-full border border-brand-100 font-bold text-brand-400 uppercase">
+                            {story?.title || 'Unknown Novel'} : {chapter?.title || 'Chapter'}
+                          </span>
+                          <span className="text-[10px] font-medium text-brand-300">
+                            {new Date(s.createdAt).toLocaleDateString()}
+                          </span>
+                        </div>
+                        
+                        <div className="space-y-2">
+                          <p className="text-[10px] font-bold text-brand-400 uppercase tracking-tighter">Your Original Text:</p>
+                          <blockquote className="text-xs italic text-brand-500 bg-white p-3 rounded-xl border-l-2 border-brand-200 line-clamp-3">
+                            "{s.selectedText}"
+                          </blockquote>
+                        </div>
+
+                        <div className="space-y-2">
+                          <p className="text-[10px] font-bold text-brand-700 uppercase tracking-tighter flex items-center gap-1">
+                            <MessageCircle size={10} /> Reader's Suggestion:
+                          </p>
+                          <div className="text-sm text-brand-800 bg-white p-4 rounded-xl border border-brand-100 shadow-sm leading-relaxed">
+                            {s.suggestedText}
+                          </div>
+                        </div>
+
+                        <div className="flex gap-2 pt-2">
+                          <button
+                            onClick={() => onResolve(s.id, 'accepted')}
+                            className="flex-1 bg-brand-800 text-brand-50 py-2 rounded-xl text-xs font-bold hover:bg-brand-700 transition-all shadow-sm"
+                          >
+                            Keep in Mind
+                          </button>
+                          <button
+                            onClick={() => onResolve(s.id, 'dismissed')}
+                            className="flex-1 bg-white text-brand-500 py-2 rounded-xl text-xs font-bold border border-brand-100 hover:bg-brand-50 transition-all"
+                          >
+                            Discard
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div className="py-20 text-center space-y-4 opacity-40">
+                  <BookOpen size={48} className="mx-auto text-brand-200" />
+                  <p className="text-brand-500 font-medium">No new suggestions yet, Master.</p>
+                </div>
+              )}
+
+              {resolved.length > 0 && (
+                <div className="space-y-4 pt-8 opacity-60">
+                  <h4 className="text-[10px] font-bold text-brand-400 uppercase tracking-widest px-1">Archive</h4>
+                  {resolved.slice(0, 5).map(s => (
+                    <div key={s.id} className="bg-white border border-brand-50 rounded-xl p-4 flex items-center justify-between">
+                      <div className="truncate flex-1">
+                        <p className="text-xs font-bold text-brand-900 truncate">"{s.selectedText}"</p>
+                        <p className="text-[10px] text-brand-400">Status: {s.status}</p>
+                      </div>
+                      <RotateCcw 
+                        size={14} 
+                        className="text-brand-300 cursor-pointer hover:text-brand-600 ml-4"
+                        onClick={() => onResolve(s.id, 'pending')}
+                      />
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </motion.aside>
+        </>
+      )}
+    </AnimatePresence>
+  );
+}
+
 function WorldManager({ 
   storyTitle, 
   creatures, 
@@ -2194,14 +2916,52 @@ function WorldManager({
                   <Trash2 size={18} />
                 </button>
               )}
-              <div className="space-y-4">
-                <DebouncedInput
-                  placeholder="Creature Name"
-                  value={creature.name}
-                  onChange={(val) => updateCreature(creature.id, { name: val })}
-                  readOnly={!isLoggedIn}
-                  className="w-full text-xl font-bold bg-transparent focus:outline-none placeholder:text-brand-200"
-                />
+              <div className="flex flex-col gap-6">
+                {/* Creature Image */}
+                {creature.imageUrl && (
+                  <div className="w-full h-48 md:h-64 bg-brand-50 rounded-2xl overflow-hidden shrink-0 border border-brand-100 relative group/img">
+                    <img 
+                      src={creature.imageUrl} 
+                      alt={creature.name} 
+                      referrerPolicy="no-referrer"
+                      className="w-full h-full object-cover"
+                      onError={(e) => {
+                        e.currentTarget.style.display = 'none';
+                        const parent = e.currentTarget.parentElement;
+                        if (parent) {
+                          const fallback = document.createElement('div');
+                          fallback.className = "w-full h-full flex flex-col items-center justify-center text-brand-300 p-2 text-center bg-brand-50";
+                          fallback.innerHTML = `
+                            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="3" rx="2" ry="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"/></svg>
+                          `;
+                          parent.appendChild(fallback);
+                        }
+                      }}
+                    />
+                  </div>
+                )}
+
+                <div className="flex-1 space-y-4">
+                  <div className="flex flex-col gap-1">
+                    <DebouncedInput
+                      placeholder="Creature Name"
+                      value={creature.name}
+                      onChange={(val) => updateCreature(creature.id, { name: val })}
+                      readOnly={!isLoggedIn}
+                      className="w-full text-xl font-bold bg-transparent focus:outline-none placeholder:text-brand-200"
+                    />
+                    {isLoggedIn && (
+                      <div className="flex items-center gap-1 opacity-60 focus-within:opacity-100 transition-opacity">
+                        <ImageIcon size={10} className="text-brand-400" />
+                        <DebouncedInput
+                          placeholder="Image URL"
+                          value={creature.imageUrl || ''}
+                          onChange={(val) => updateCreature(creature.id, { imageUrl: val })}
+                          className="text-[9px] bg-transparent border-none focus:outline-none text-brand-400 w-full"
+                        />
+                      </div>
+                    )}
+                  </div>
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-1.5">
                     <label className="text-[10px] font-bold text-brand-400 uppercase tracking-wider">Species</label>
@@ -2269,6 +3029,7 @@ function WorldManager({
                 </div>
               </div>
             </div>
+          </div>
           ))}
           {creatures.length === 0 && (
             <div className="col-span-full text-center py-16 bg-white rounded-3xl border-2 border-dashed border-brand-100 text-brand-400">
@@ -2305,14 +3066,52 @@ function WorldManager({
                   <Trash2 size={18} />
                 </button>
               )}
-              <div className="space-y-4">
-                <DebouncedInput
-                  placeholder="Location Name"
-                  value={location.name}
-                  onChange={(val) => updateLocation(location.id, { name: val })}
-                  readOnly={!isLoggedIn}
-                  className="w-full text-xl font-bold bg-transparent focus:outline-none placeholder:text-brand-200"
-                />
+              <div className="flex flex-col gap-6">
+                {/* Location Image */}
+                {location.imageUrl && (
+                  <div className="w-full h-48 md:h-64 bg-brand-50 rounded-2xl overflow-hidden shrink-0 border border-brand-100 relative group/img">
+                    <img 
+                      src={location.imageUrl} 
+                      alt={location.name} 
+                      referrerPolicy="no-referrer"
+                      className="w-full h-full object-cover"
+                      onError={(e) => {
+                        e.currentTarget.style.display = 'none';
+                        const parent = e.currentTarget.parentElement;
+                        if (parent) {
+                          const fallback = document.createElement('div');
+                          fallback.className = "w-full h-full flex flex-col items-center justify-center text-brand-300 p-2 text-center bg-brand-50";
+                          fallback.innerHTML = `
+                            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="3" rx="2" ry="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"/></svg>
+                          `;
+                          parent.appendChild(fallback);
+                        }
+                      }}
+                    />
+                  </div>
+                )}
+
+                <div className="flex-1 space-y-4">
+                  <div className="flex flex-col gap-1">
+                    <DebouncedInput
+                      placeholder="Location Name"
+                      value={location.name}
+                      onChange={(val) => updateLocation(location.id, { name: val })}
+                      readOnly={!isLoggedIn}
+                      className="w-full text-xl font-bold bg-transparent focus:outline-none placeholder:text-brand-200"
+                    />
+                    {isLoggedIn && (
+                      <div className="flex items-center gap-1 opacity-60 focus-within:opacity-100 transition-opacity">
+                        <ImageIcon size={10} className="text-brand-400" />
+                        <DebouncedInput
+                          placeholder="Image URL"
+                          value={location.imageUrl || ''}
+                          onChange={(val) => updateLocation(location.id, { imageUrl: val })}
+                          className="text-[9px] bg-transparent border-none focus:outline-none text-brand-400 w-full"
+                        />
+                      </div>
+                    )}
+                  </div>
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-1.5">
                     <label className="text-[10px] font-bold text-brand-400 uppercase tracking-wider">Climate</label>
@@ -2357,6 +3156,7 @@ function WorldManager({
                 </div>
               </div>
             </div>
+          </div>
           ))}
           {locations.length === 0 && (
             <div className="col-span-full text-center py-16 bg-white rounded-3xl border-2 border-dashed border-brand-100 text-brand-400">
@@ -2393,14 +3193,52 @@ function WorldManager({
                   <Trash2 size={18} />
                 </button>
               )}
-              <div className="space-y-4">
-                <DebouncedInput
-                  placeholder="Faction Name"
-                  value={faction.name}
-                  onChange={(val) => updateFaction(faction.id, { name: val })}
-                  readOnly={!isLoggedIn}
-                  className="w-full text-xl font-bold bg-transparent focus:outline-none placeholder:text-brand-200"
-                />
+              <div className="flex flex-col gap-6">
+                {/* Faction Image */}
+                {faction.imageUrl && (
+                  <div className="w-full h-48 md:h-64 bg-brand-50 rounded-2xl overflow-hidden shrink-0 border border-brand-100 relative group/img">
+                    <img 
+                      src={faction.imageUrl} 
+                      alt={faction.name} 
+                      referrerPolicy="no-referrer"
+                      className="w-full h-full object-cover"
+                      onError={(e) => {
+                        e.currentTarget.style.display = 'none';
+                        const parent = e.currentTarget.parentElement;
+                        if (parent) {
+                          const fallback = document.createElement('div');
+                          fallback.className = "w-full h-full flex flex-col items-center justify-center text-brand-300 p-2 text-center bg-brand-50";
+                          fallback.innerHTML = `
+                            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="3" rx="2" ry="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"/></svg>
+                          `;
+                          parent.appendChild(fallback);
+                        }
+                      }}
+                    />
+                  </div>
+                )}
+
+                <div className="flex-1 space-y-4">
+                  <div className="flex flex-col gap-1">
+                    <DebouncedInput
+                      placeholder="Faction Name"
+                      value={faction.name}
+                      onChange={(val) => updateFaction(faction.id, { name: val })}
+                      readOnly={!isLoggedIn}
+                      className="w-full text-xl font-bold bg-transparent focus:outline-none placeholder:text-brand-200"
+                    />
+                    {isLoggedIn && (
+                      <div className="flex items-center gap-1 opacity-60 focus-within:opacity-100 transition-opacity">
+                        <ImageIcon size={10} className="text-brand-400" />
+                        <DebouncedInput
+                          placeholder="Image URL"
+                          value={faction.imageUrl || ''}
+                          onChange={(val) => updateFaction(faction.id, { imageUrl: val })}
+                          className="text-[9px] bg-transparent border-none focus:outline-none text-brand-400 w-full"
+                        />
+                      </div>
+                    )}
+                  </div>
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-1.5">
                     <label className="text-[10px] font-bold text-brand-400 uppercase tracking-wider">Leader</label>
@@ -2457,6 +3295,7 @@ function WorldManager({
                 </div>
               </div>
             </div>
+          </div>
           ))}
           {factions.length === 0 && (
             <div className="col-span-full text-center py-16 bg-white rounded-3xl border-2 border-dashed border-brand-100 text-brand-400">
@@ -2493,14 +3332,40 @@ function WorldManager({
                   <Trash2 size={18} />
                 </button>
               )}
-              <div className="space-y-4">
-                <DebouncedInput
-                  placeholder="Skill Name"
-                  value={skill.name}
-                  onChange={(val) => updateSkill(skill.id, { name: val })}
-                  readOnly={!isLoggedIn}
-                  className="w-full text-xl font-bold bg-transparent focus:outline-none placeholder:text-brand-200"
-                />
+              <div className="flex flex-col gap-6">
+                {/* Skill Image */}
+                {skill.imageUrl && (
+                  <div className="w-full h-48 md:h-64 bg-brand-50 rounded-2xl overflow-hidden shrink-0 border border-brand-100 relative group/img">
+                    <img 
+                      src={skill.imageUrl} 
+                      alt={skill.name} 
+                      referrerPolicy="no-referrer"
+                      className="w-full h-full object-cover"
+                    />
+                  </div>
+                )}
+
+                <div className="flex-1 space-y-4">
+                  <div className="flex flex-col gap-1">
+                    <DebouncedInput
+                      placeholder="Skill Name"
+                      value={skill.name}
+                      onChange={(val) => updateSkill(skill.id, { name: val })}
+                      readOnly={!isLoggedIn}
+                      className="w-full text-xl font-bold bg-transparent focus:outline-none placeholder:text-brand-200"
+                    />
+                    {isLoggedIn && (
+                      <div className="flex items-center gap-1 opacity-60 focus-within:opacity-100 transition-opacity">
+                        <ImageIcon size={10} className="text-brand-400" />
+                        <DebouncedInput
+                          placeholder="Image URL"
+                          value={skill.imageUrl || ''}
+                          onChange={(val) => updateSkill(skill.id, { imageUrl: val })}
+                          className="text-[9px] bg-transparent border-none focus:outline-none text-brand-400 w-full"
+                        />
+                      </div>
+                    )}
+                  </div>
                 <div className="space-y-1.5">
                   <label className="text-[10px] font-bold text-brand-400 uppercase tracking-wider">Category</label>
                   <div className="flex flex-wrap gap-2">
@@ -2533,6 +3398,7 @@ function WorldManager({
                 </div>
               </div>
             </div>
+          </div>
           ))}
           {skills.length === 0 && (
             <div className="col-span-full text-center py-16 bg-white rounded-3xl border-2 border-dashed border-brand-100 text-brand-400">
@@ -2569,14 +3435,52 @@ function WorldManager({
                   <Trash2 size={18} />
                 </button>
               )}
-              <div className="space-y-4">
-                <DebouncedInput
-                  placeholder="Weapon Name"
-                  value={weapon.name}
-                  onChange={(val) => updateWeapon(weapon.id, { name: val })}
-                  readOnly={!isLoggedIn}
-                  className="w-full text-xl font-bold bg-transparent focus:outline-none placeholder:text-brand-200"
-                />
+              <div className="flex flex-col gap-6">
+                {/* Weapon Image */}
+                {weapon.imageUrl && (
+                  <div className="w-full h-48 md:h-64 bg-brand-50 rounded-2xl overflow-hidden shrink-0 border border-brand-100 relative group/img">
+                    <img 
+                      src={weapon.imageUrl} 
+                      alt={weapon.name} 
+                      referrerPolicy="no-referrer"
+                      className="w-full h-full object-cover"
+                      onError={(e) => {
+                        e.currentTarget.style.display = 'none';
+                        const parent = e.currentTarget.parentElement;
+                        if (parent) {
+                          const fallback = document.createElement('div');
+                          fallback.className = "w-full h-full flex flex-col items-center justify-center text-brand-300 p-2 text-center bg-brand-50";
+                          fallback.innerHTML = `
+                            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="3" rx="2" ry="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"/></svg>
+                          `;
+                          parent.appendChild(fallback);
+                        }
+                      }}
+                    />
+                  </div>
+                )}
+
+                <div className="flex-1 space-y-4">
+                  <div className="flex flex-col gap-1">
+                    <DebouncedInput
+                      placeholder="Weapon Name"
+                      value={weapon.name}
+                      onChange={(val) => updateWeapon(weapon.id, { name: val })}
+                      readOnly={!isLoggedIn}
+                      className="w-full text-xl font-bold bg-transparent focus:outline-none placeholder:text-brand-200"
+                    />
+                    {isLoggedIn && (
+                      <div className="flex items-center gap-1 opacity-60 focus-within:opacity-100 transition-opacity">
+                        <ImageIcon size={10} className="text-brand-400" />
+                        <DebouncedInput
+                          placeholder="Image URL"
+                          value={weapon.imageUrl || ''}
+                          onChange={(val) => updateWeapon(weapon.id, { imageUrl: val })}
+                          className="text-[9px] bg-transparent border-none focus:outline-none text-brand-400 w-full"
+                        />
+                      </div>
+                    )}
+                  </div>
                 <div className="space-y-1.5">
                   <label className="text-[10px] font-bold text-brand-400 uppercase tracking-wider">Rarity</label>
                   <div className="flex flex-wrap gap-2">
@@ -2609,6 +3513,7 @@ function WorldManager({
                 </div>
               </div>
             </div>
+          </div>
           ))}
           {weapons.length === 0 && (
             <div className="col-span-full text-center py-16 bg-white rounded-3xl border-2 border-dashed border-brand-100 text-brand-400">

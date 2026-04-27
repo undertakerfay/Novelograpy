@@ -6,6 +6,7 @@ export interface Character {
   traits: string[];
   isPinned?: boolean;
   gender?: 'male' | 'female' | 'other';
+  imageUrl?: string;
 }
 
 export interface PlotPoint {
@@ -25,6 +26,7 @@ export interface Chapter {
   deletedAt?: number;
   completions?: number;
   isPublished?: boolean;
+  imageUrl?: string;
 }
 
 export interface Creature {
@@ -35,6 +37,7 @@ export interface Creature {
   abilities: string;
   threatLevel: 'low' | 'medium' | 'high' | 'calamity';
   description: string;
+  imageUrl?: string;
 }
 
 export interface Location {
@@ -44,6 +47,7 @@ export interface Location {
   rulingPower: string;
   lore: string;
   description: string;
+  imageUrl?: string;
 }
 
 export interface Faction {
@@ -53,6 +57,7 @@ export interface Faction {
   influence: string;
   alignment: 'ally' | 'neutral' | 'enemy';
   description: string;
+  imageUrl?: string;
 }
 
 export interface Skill {
@@ -60,6 +65,7 @@ export interface Skill {
   name: string;
   category: 'Common' | 'Extra' | 'Unique' | 'Ultimate' | 'Ancient' | 'Legendary';
   description: string;
+  imageUrl?: string;
 }
 
 export interface Weapon {
@@ -67,6 +73,7 @@ export interface Weapon {
   name: string;
   rarity: 'Common' | 'Rare' | 'Super Rare' | 'Legendary' | 'Mythical';
   description: string;
+  imageUrl?: string;
 }
 
 export interface Story {
@@ -89,6 +96,21 @@ export interface Story {
   isPublished?: boolean;
   ownerId: string;
   lockVersion?: number;
+  imageUrl?: string;
+}
+
+export interface Suggestion {
+  id: string;
+  storyId: string;
+  storyOwnerId: string;
+  chapterId: string;
+  readerId: string;
+  readerEmail?: string;
+  selectedText: string;
+  suggestedText: string;
+  status: 'pending' | 'accepted' | 'dismissed';
+  createdAt: number;
+  resolvedAt?: number;
 }
 
 export type AppView = 'dashboard' | 'editor';

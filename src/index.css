@@ -25,6 +25,9 @@
 
 .writing-area {
   @apply font-serif leading-relaxed text-lg;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  overflow-wrap: break-word;
 }
 
 .no-scrollbar::-webkit-scrollbar {

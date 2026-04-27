@@ -44,7 +44,8 @@
         "deletedAt": { "type": "number", "description": "Timestamp when the story was deleted." },
         "isPinned": { "type": "boolean", "description": "Whether the story is pinned to the top." },
         "isPublished": { "type": "boolean" },
-        "ownerId": { "type": "string", "description": "The UID of the user who owns this story." }
+        "ownerId": { "type": "string", "description": "The UID of the user who owns this story." },
+        "imageUrl": { "type": "string", "description": "Cover photo URL." }
       },
       "required": ["title", "lastModified", "ownerId"]
     },
@@ -59,7 +60,8 @@
         "description": { "type": "string" },
         "traits": { "type": "array", "items": { "type": "string" } },
         "isPinned": { "type": "boolean" },
-        "gender": { "type": "string", "enum": ["male", "female", "other"] }
+        "gender": { "type": "string", "enum": ["male", "female", "other"] },
+        "imageUrl": { "type": "string" }
       }
     },
     "Chapter": {
@@ -100,7 +102,8 @@
         "habitat": { "type": "string" },
         "abilities": { "type": "string" },
         "threatLevel": { "type": "string", "enum": ["low", "medium", "high", "calamity"] },
-        "description": { "type": "string" }
+        "description": { "type": "string" },
+        "imageUrl": { "type": "string" }
       }
     },
     "Location": {
@@ -113,7 +116,8 @@
         "climate": { "type": "string" },
         "rulingPower": { "type": "string" },
         "lore": { "type": "string" },
-        "description": { "type": "string" }
+        "description": { "type": "string" },
+        "imageUrl": { "type": "string" }
       }
     },
     "Faction": {
@@ -126,7 +130,8 @@
         "leader": { "type": "string" },
         "influence": { "type": "string" },
         "alignment": { "type": "string", "enum": ["ally", "neutral", "enemy"] },
-        "description": { "type": "string" }
+        "description": { "type": "string" },
+        "imageUrl": { "type": "string" }
       }
     },
     "Skill": {
@@ -137,7 +142,8 @@
         "id": { "type": "string" },
         "name": { "type": "string" },
         "category": { "type": "string", "enum": ["Common", "Extra", "Unique", "Ultimate", "Ancient", "Legendary"] },
-        "description": { "type": "string" }
+        "description": { "type": "string" },
+        "imageUrl": { "type": "string" }
       }
     },
     "Weapon": {
@@ -148,7 +154,8 @@
         "id": { "type": "string" },
         "name": { "type": "string" },
         "rarity": { "type": "string", "enum": ["Common", "Rare", "Super Rare", "Legendary", "Mythical"] },
-        "description": { "type": "string" }
+        "description": { "type": "string" },
+        "imageUrl": { "type": "string" }
       }
     },
     "User": {
@@ -159,6 +166,25 @@
         "email": { "type": "string" },
         "role": { "type": "string", "enum": ["admin", "user"] }
       }
+    },
+    "Suggestion": {
+      "title": "Suggestion",
+      "description": "A highlight and suggestion from a reader.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "storyId": { "type": "string" },
+        "storyOwnerId": { "type": "string" },
+        "chapterId": { "type": "string" },
+        "readerId": { "type": "string" },
+        "readerEmail": { "type": "string" },
+        "selectedText": { "type": "string" },
+        "suggestedText": { "type": "string" },
+        "status": { "type": "string", "enum": ["pending", "accepted", "dismissed"] },
+        "createdAt": { "type": "number" },
+        "resolvedAt": { "type": "number" }
+      },
+      "required": ["storyId", "storyOwnerId", "chapterId", "readerId", "selectedText", "suggestedText", "status", "createdAt"]
     }
   },
   "firestore": {
@@ -169,6 +195,10 @@
     "users": {
       "schema": "User",
       "description": "Collection of user profiles."
+    },
+    "suggestions": {
+      "schema": "Suggestion",
+      "description": "Collection of highlights and suggestions."
     }
   }
 }
